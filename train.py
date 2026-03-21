@@ -424,9 +424,22 @@ def train(cfg: dict, resume_path: Optional[str] = None):
     """
     # ── Setup ────────────────────────────────────────────────────────────────
     set_seed(cfg["experiment"]["seed"])
-    device = torch.device(
-        cfg["experiment"]["device"] if torch.cuda.is_available() else "cpu"
-    )
+
+    # Probe CUDA before committing — P100 (sm_60) is incompatible with
+    # PyTorch builds requiring sm_70+. A small tensor op exposes this
+    # immediately rather than crashing mid-training on BatchNorm.
+    if torch.cuda.is_available() and cfg["experiment"]["device"] == "cuda":
+        try:
+            torch.zeros(1).cuda()
+            device = torch.device("cuda")
+        except Exception as e:
+            print(f"[Setup] CUDA probe failed: {e}")
+            print("[Setup] Falling back to CPU.")
+            print("[Setup] Fix: Kaggle Settings -> Accelerator -> GPU T4 x1")
+            device = torch.device("cpu")
+    else:
+        device = torch.device("cpu")
+
     print(f"[Setup] Device: {device}")
 
     os.makedirs(cfg["experiment"]["log_dir"],        exist_ok=True)
