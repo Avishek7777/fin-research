@@ -1,0 +1,158 @@
+# =============================================================================
+# FIN Configuration — CIFAR-100
+# Every parameter here maps directly to a definition in the paper.
+# See README.md for the full paper → code mapping.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Experiment
+# -----------------------------------------------------------------------------
+experiment:
+  name: "fin_cifar100_v1"
+  seed: 42
+  device: "cuda"                # "cuda" or "cpu"
+  log_dir: "runs/"
+  checkpoint_dir: "checkpoints/"
+
+# -----------------------------------------------------------------------------
+# Dataset
+# -----------------------------------------------------------------------------
+data:
+  dataset: "cifar100"
+  root: "./data"
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+
+  # CIFAR-100 has 100 fine classes and 20 coarse superclasses.
+  # This natural hierarchy directly validates FIN's multi-level abstraction.
+  num_fine_classes: 100          # L1 objective target
+  num_coarse_classes: 20         # L2 objective target
+
+# -----------------------------------------------------------------------------
+# Architecture — Level Hierarchy (Definition 1.2)
+# Representation dimensionality must be strictly decreasing: d0 > d1 > d2
+# -----------------------------------------------------------------------------
+architecture:
+  # Level 0 — Raw Signal Processing (CNN encoder/decoder)
+  # Maps: R^(3x32x32) → R^d0
+  level0:
+    type: "cnn"
+    out_dim: 512                 # d0 — highest dimensionality
+    num_channels: [64, 128, 256] # Progressive CNN channel sizes
+
+  # Level 1 — Local Pattern / Fine Concept (Small Transformer)
+  # Maps: R^d0 → R^d1
+  level1:
+    type: "transformer"
+    out_dim: 128                 # d1 < d0
+    num_heads: 4
+    num_layers: 2
+    dropout: 0.1
+
+  # Level 2 — Abstract Concept (MLP)
+  # Maps: R^d1 → R^d2
+  level2:
+    type: "mlp"
+    out_dim: 32                  # d2 < d1 — most compressed
+    hidden_dim: 64
+
+# -----------------------------------------------------------------------------
+# Bandwidth Channels (Definition 1.3)
+# Hinge loss: L_BW = sum_k gamma_k * max(0, KL(N(mu,sigma)||N(0,I)) - beta_k)
+# beta_k: capacity budget (nats) — soft upper bound on I(Z_{k-1}; Z_k)
+# gamma_k: constraint tightness — how hard we penalize exceeding beta_k
+# -----------------------------------------------------------------------------
+bandwidth:
+  # Channel between L0 → L1
+  channel_01:
+    beta: 16.0                   # beta_1: budget in nats
+    gamma: 1.0                   # gamma_1: tightness coefficient
+
+  # Channel between L1 → L2
+  channel_12:
+    beta: 4.0                    # beta_2: tighter budget (higher abstraction)
+    gamma: 1.0                   # gamma_2: tightness coefficient
+
+  # Note: beta_1 > beta_2 enforces increasing compression up the hierarchy.
+  # Reducing gamma → looser constraint (FIN degrades toward flat net).
+  # Ablation: set gamma=0 to remove bandwidth constraint entirely.
+
+# -----------------------------------------------------------------------------
+# Top-Down Feedback (Definition 1.4)
+# z~_{k-1} = z_{k-1} + alpha_k * g_k(z_k)
+# alpha_k: learned scalar gate on top-down influence
+# Ablation: set feedback=false to remove top-down connections entirely.
+# -----------------------------------------------------------------------------
+feedback:
+  enabled: true
+  # alpha_k initialized at 0.1 — small initial top-down influence,
+  # grows during training as higher levels become meaningful.
+  alpha_init: 0.1
+
+# -----------------------------------------------------------------------------
+# Loss — Hierarchical Objective (Definition 1.6)
+# L_FIN = sum_k lambda_k * O_k(z_k) + L_BW
+# lambda_k: weight for each level's local objective
+# -----------------------------------------------------------------------------
+loss:
+  # L0: reconstruction loss (MSE between input and decoded output)
+  lambda_0: 0.1                  # Lower weight — reconstruction is auxiliary
+
+  # L1: fine-grained classification (CrossEntropy, 100 classes)
+  lambda_1: 1.0                  # Primary task objective
+
+  # L2: coarse classification (CrossEntropy, 20 superclasses)
+  lambda_2: 0.5                  # Secondary task objective
+
+# -----------------------------------------------------------------------------
+# Beta Annealing — Training Strategy (Appendix)
+# beta_k(t) = beta_k_max * exp(-lambda * t)
+# Start with loose constraints, tighten over training.
+# This stabilizes early training — network first learns to be useful,
+# then learns to compress.
+# Set enabled: false to use fixed beta throughout (no annealing).
+# -----------------------------------------------------------------------------
+annealing:
+  enabled: true
+  strategy: "exponential"        # "exponential" or "linear" or "cosine"
+  warmup_epochs: 10              # Epochs before annealing begins
+  decay_lambda: 0.05             # Controls annealing speed
+
+# -----------------------------------------------------------------------------
+# Training
+# -----------------------------------------------------------------------------
+training:
+  epochs: 100
+  optimizer: "adamw"
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  lr_scheduler: "cosine"
+  warmup_epochs: 5
+
+  # Gradient clipping — important for stability with hierarchical losses
+  grad_clip: 1.0
+
+  # Evaluation frequency
+  eval_every: 5                  # Evaluate every N epochs
+  save_best: true                # Save checkpoint with best coarse+fine joint acc
+
+# -----------------------------------------------------------------------------
+# Ablations (used by experiments/ablations.py)
+# Each entry overrides specific config values to isolate one component.
+# -----------------------------------------------------------------------------
+ablations:
+  no_bandwidth:
+    bandwidth.channel_01.gamma: 0.0
+    bandwidth.channel_12.gamma: 0.0
+
+  no_per_level_objectives:
+    loss.lambda_0: 0.0
+    loss.lambda_2: 0.0           # Only L1 fine classification remains
+
+  no_top_down_feedback:
+    feedback.enabled: false
+
+  no_self_similarity:
+    # Handled in code — uses bespoke level designs instead of shared template
+    architecture.self_similar: false

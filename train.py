@@ -1,0 +1,593 @@
+"""
+train.py
+
+FIN Training Script — CIFAR-100
+================================
+
+Usage:
+    python train.py --config configs/fin_cifar100.yaml
+    python train.py --config configs/fin_cifar100.yaml --ablation no_bandwidth
+    python train.py --config configs/fin_cifar100.yaml --resume checkpoints/last.pt
+
+What this script does:
+    1. Loads and validates config (with optional ablation overrides)
+    2. Builds CIFAR-100 dataloaders (fine + coarse labels together)
+    3. Builds FIN model, optimizer, and LR scheduler
+    4. Runs training loop with:
+         - Beta annealing (once per epoch)
+         - Per-batch forward/backward/step
+         - Gradient clipping
+         - TensorBoard logging (every batch)
+         - Epoch-level metric averaging and console output
+    5. Evaluates on validation set every eval_every epochs
+    6. Saves best checkpoint (by joint fine+coarse accuracy)
+    7. Saves last checkpoint (for resuming)
+
+CIFAR-100 label handling:
+    CIFAR-100 provides both fine labels (0-99) and coarse labels (0-19).
+    torchvision's CIFAR100 dataset stores:
+        target        = fine label
+        targets_coarse is NOT provided directly — we derive it via
+        a fixed fine->coarse mapping (CIFAR100_COARSE_LABELS below).
+    This mapping is the official PyTorch/CIFAR-100 superclass assignment.
+"""
+
+import os
+import sys
+import math
+import time
+import yaml
+import argparse
+import random
+from copy import deepcopy
+from typing import Optional
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
+import torchvision
+import torchvision.transforms as T
+from tqdm import tqdm
+
+from fin.network.fin import build_fin, FIN
+from fin.losses.hierarchical import MetricsTracker
+
+
+# =============================================================================
+# CIFAR-100 Fine -> Coarse Label Mapping
+# =============================================================================
+# Official mapping: fine class index -> coarse superclass index
+# Source: https://www.cs.toronto.edu/~kriz/cifar.html
+# 20 superclasses, each containing 5 fine classes.
+
+CIFAR100_COARSE_LABELS = [
+    4,  1,  14, 8,  0,  6,  7,  7,  18, 3,   # 0-9
+    3,  14, 9,  18, 7,  11, 3,  9,  7,  11,  # 10-19
+    6,  11, 5,  10, 7,  6,  13, 15, 3,  15,  # 20-29
+    0,  11, 1,  10, 12, 14, 16, 9,  11, 5,   # 30-39
+    5,  19, 8,  8,  15, 13, 14, 17, 18, 10,  # 40-49
+    16, 4,  17, 4,  2,  0,  17, 4,  18, 17,  # 50-59
+    10, 3,  2,  12, 12, 16, 12, 1,  9,  19,  # 60-69
+    2,  10, 0,  1,  16, 12, 9,  13, 15, 13,  # 70-79
+    16, 19, 2,  4,  6,  19, 5,  5,  8,  19,  # 80-89
+    18, 1,  2,  15, 6,  0,  17, 8,  14, 13,  # 90-99
+]
+
+COARSE_LABEL_TENSOR = torch.tensor(CIFAR100_COARSE_LABELS, dtype=torch.long)
+
+
+# =============================================================================
+# Utilities
+# =============================================================================
+
+def set_seed(seed: int):
+    """Set all random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark     = False
+
+
+def apply_ablation(cfg: dict, ablation: Optional[str]) -> dict:
+    """
+    Apply ablation overrides to the config.
+    Maps ablation name to the override dict defined in config.ablations.
+
+    Args:
+        cfg     : full config dict
+        ablation: ablation name (e.g. "no_bandwidth") or None
+
+    Returns:
+        Modified config dict (deep copy — original untouched)
+    """
+    if ablation is None:
+        return cfg
+
+    ablations = cfg.get("ablations", {})
+    if ablation not in ablations:
+        raise ValueError(
+            f"Unknown ablation '{ablation}'. "
+            f"Available: {list(ablations.keys())}"
+        )
+
+    cfg = deepcopy(cfg)
+    overrides = ablations[ablation]
+
+    for key_path, value in overrides.items():
+        # key_path format: "section.subsection.key" e.g. "bandwidth.channel_01.gamma"
+        keys  = key_path.split(".")
+        node  = cfg
+        for k in keys[:-1]:
+            node = node[k]
+        node[keys[-1]] = value
+
+    print(f"[Ablation] Applied '{ablation}': {overrides}")
+    return cfg
+
+
+# =============================================================================
+# Dataset
+# =============================================================================
+
+def build_dataloaders(data_cfg: dict) -> tuple:
+    """
+    Build CIFAR-100 train and validation dataloaders.
+
+    Both fine labels (torchvision default) and coarse labels
+    (derived via CIFAR100_COARSE_LABELS) are provided per batch.
+
+    Returns:
+        train_loader, val_loader
+    """
+    # Standard CIFAR-100 augmentation for training
+    train_transform = T.Compose([
+        T.RandomCrop(32, padding=4),
+        T.RandomHorizontalFlip(),
+        T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        T.ToTensor(),
+        T.Normalize(mean=[0.5071, 0.4867, 0.4408],
+                    std =[0.2675, 0.2565, 0.2761]),
+    ])
+
+    val_transform = T.Compose([
+        T.ToTensor(),
+        T.Normalize(mean=[0.5071, 0.4867, 0.4408],
+                    std =[0.2675, 0.2565, 0.2761]),
+    ])
+
+    train_dataset = torchvision.datasets.CIFAR100(
+        root      = data_cfg["root"],
+        train     = True,
+        download  = True,
+        transform = train_transform,
+    )
+
+    val_dataset = torchvision.datasets.CIFAR100(
+        root      = data_cfg["root"],
+        train     = False,
+        download  = True,
+        transform = val_transform,
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size  = data_cfg["batch_size"],
+        shuffle     = True,
+        num_workers = data_cfg["num_workers"],
+        pin_memory  = data_cfg["pin_memory"],
+        drop_last   = True,    # keeps batch sizes consistent
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size  = data_cfg["batch_size"] * 2,   # no grad -> bigger batches
+        shuffle     = False,
+        num_workers = data_cfg["num_workers"],
+        pin_memory  = data_cfg["pin_memory"],
+    )
+
+    return train_loader, val_loader
+
+
+def get_coarse_labels(fine_labels: torch.Tensor) -> torch.Tensor:
+    """
+    Derive coarse labels from fine labels using the official mapping.
+
+    Args:
+        fine_labels: (B,) fine class indices 0-99
+    Returns:
+        coarse_labels: (B,) superclass indices 0-19
+    """
+    return COARSE_LABEL_TENSOR[fine_labels]
+
+
+# =============================================================================
+# Optimizer and Scheduler
+# =============================================================================
+
+def build_optimizer(model: FIN, training_cfg: dict) -> optim.Optimizer:
+    """
+    Build AdamW optimizer.
+
+    We use different weight decay for:
+      - Bias terms and LayerNorm parameters: no decay (standard practice)
+      - Everything else: weight_decay from config
+    """
+    decay_params    = []
+    no_decay_params = []
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if param.ndim <= 1 or name.endswith(".bias"):
+            no_decay_params.append(param)
+        else:
+            decay_params.append(param)
+
+    optimizer = optim.AdamW([
+        {"params": decay_params,    "weight_decay": training_cfg["weight_decay"]},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ], lr=training_cfg["lr"])
+
+    return optimizer
+
+
+def build_lr_scheduler(
+    optimizer   : optim.Optimizer,
+    training_cfg: dict,
+) -> optim.lr_scheduler._LRScheduler:
+    """
+    Build cosine LR scheduler with linear warmup.
+
+    Warmup: LR linearly increases from 0 -> base_lr over warmup_epochs.
+    Cosine: LR decays from base_lr -> 0 over remaining epochs.
+    """
+    warmup_epochs = training_cfg["warmup_epochs"]
+    total_epochs  = training_cfg["epochs"]
+
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            # Linear warmup
+            return float(epoch + 1) / float(warmup_epochs)
+        else:
+            # Cosine decay
+            progress = (epoch - warmup_epochs) / max(total_epochs - warmup_epochs, 1)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda) # type: ignore
+
+
+# =============================================================================
+# Checkpoint
+# =============================================================================
+
+def save_checkpoint(
+    model    : FIN,
+    optimizer: optim.Optimizer,
+    scheduler,
+    epoch    : int,
+    metrics  : dict,
+    path     : str,
+):
+    """Save training checkpoint."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save({
+        "epoch"       : epoch,
+        "model_state" : model.state_dict(),
+        "optim_state" : optimizer.state_dict(),
+        "sched_state" : scheduler.state_dict(),
+        "metrics"     : metrics,
+    }, path)
+
+
+def load_checkpoint(
+    path     : str,
+    model    : FIN,
+    optimizer: optim.Optimizer,
+    scheduler,
+    device   : torch.device,
+) -> int:
+    """
+    Load checkpoint and return the epoch to resume from.
+
+    Returns:
+        start_epoch: epoch to resume training from
+    """
+    ckpt        = torch.load(path, map_location=device)
+    model.load_state_dict(ckpt["model_state"])
+    optimizer.load_state_dict(ckpt["optim_state"])
+    scheduler.load_state_dict(ckpt["sched_state"])
+    start_epoch = ckpt["epoch"] + 1
+    print(f"[Resume] Loaded checkpoint from epoch {ckpt['epoch']}")
+    print(f"[Resume] Previous metrics: {ckpt['metrics']}")
+    return start_epoch
+
+
+# =============================================================================
+# Training Loop — One Epoch
+# =============================================================================
+
+def train_one_epoch(
+    model      : FIN,
+    loader     : DataLoader,
+    optimizer  : optim.Optimizer,
+    writer     : SummaryWriter,
+    epoch      : int,
+    cfg        : dict,
+    global_step: int,
+    device     : torch.device,
+) -> tuple:
+    """
+    Train for one epoch.
+
+    Returns:
+        tracker (MetricsTracker): accumulated metrics for this epoch
+        global_step (int)       : updated global step count
+    """
+    model.train()
+    tracker   = MetricsTracker()
+    grad_clip = cfg["training"]["grad_clip"]
+
+    pbar = tqdm(loader, desc=f"Epoch {epoch:03d} [train]", leave=False)
+
+    for x, fine_labels in pbar:
+        x            = x.to(device, non_blocking=True)
+        fine_labels  = fine_labels.to(device, non_blocking=True)
+        coarse_labels= get_coarse_labels(fine_labels).to(device)
+
+        # ── Forward ──────────────────────────────────────────────────────
+        out = model(x, fine_labels, coarse_labels)
+
+        # ── Backward ─────────────────────────────────────────────────────
+        optimizer.zero_grad(set_to_none=True)
+        out.total_loss.backward()
+
+        # Gradient clipping — important for stability with hierarchical losses
+        nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
+        optimizer.step()
+
+        # ── Logging ──────────────────────────────────────────────────────
+        tracker.update(out.breakdown)
+
+        # TensorBoard: log every batch
+        bd = out.breakdown.to_dict()
+        for key, val in bd.items():
+            writer.add_scalar(f"train/batch/{key}", val, global_step)
+
+        # Update progress bar with key metrics
+        pbar.set_postfix({
+            "loss"      : f"{out.total_loss.item():.3f}",
+            "fine_acc"  : f"{out.breakdown.fine_acc:.1f}%",
+            "coarse_acc": f"{out.breakdown.coarse_acc:.1f}%",
+        })
+
+        global_step += 1
+
+    return tracker, global_step
+
+
+# =============================================================================
+# Validation Loop
+# =============================================================================
+
+@torch.no_grad()
+def validate(
+    model : FIN,
+    loader: DataLoader,
+    writer: SummaryWriter,
+    epoch : int,
+    device: torch.device,
+) -> dict:
+    """
+    Run validation and return averaged metrics.
+
+    Uses stochastic forward (not deterministic) to match training conditions.
+    For representation analysis, use encode_deterministic() in evaluate.py.
+    """
+    model.eval()
+    tracker = MetricsTracker()
+
+    for x, fine_labels in tqdm(loader, desc=f"Epoch {epoch:03d} [val]", leave=False):
+        x             = x.to(device, non_blocking=True)
+        fine_labels   = fine_labels.to(device, non_blocking=True)
+        coarse_labels = get_coarse_labels(fine_labels).to(device)
+
+        out = model(x, fine_labels, coarse_labels)
+        tracker.update(out.breakdown)
+
+    avg = tracker.average()
+
+    # TensorBoard: log epoch-level val metrics
+    for key, val in avg.items():
+        writer.add_scalar(f"val/epoch/{key}", val, epoch)
+
+    return avg
+
+
+# =============================================================================
+# Main Training Function
+# =============================================================================
+
+def train(cfg: dict, resume_path: Optional[str] = None):
+    """
+    Full training run.
+
+    Args:
+        cfg        : full config dict (after ablation overrides applied)
+        resume_path: path to checkpoint to resume from, or None
+    """
+    # ── Setup ────────────────────────────────────────────────────────────────
+    set_seed(cfg["experiment"]["seed"])
+    device = torch.device(
+        cfg["experiment"]["device"] if torch.cuda.is_available() else "cpu"
+    )
+    print(f"[Setup] Device: {device}")
+
+    os.makedirs(cfg["experiment"]["log_dir"],        exist_ok=True)
+    os.makedirs(cfg["experiment"]["checkpoint_dir"], exist_ok=True)
+
+    writer = SummaryWriter(
+        log_dir=os.path.join(cfg["experiment"]["log_dir"], cfg["experiment"]["name"])
+    )
+
+    # ── Data ─────────────────────────────────────────────────────────────────
+    print("[Data] Building CIFAR-100 dataloaders...")
+    train_loader, val_loader = build_dataloaders(cfg["data"])
+    print(f"[Data] Train batches: {len(train_loader)} | Val batches: {len(val_loader)}")
+
+    # ── Model ────────────────────────────────────────────────────────────────
+    print("[Model] Building FIN...")
+    model = build_fin(cfg).to(device)
+    print(model.architecture_summary())
+
+    pc = model.param_count()
+    print(f"[Model] Total parameters: {pc['total']:,} ({pc['total_M']}M)")
+    writer.add_text("model/architecture", model.architecture_summary())
+    writer.add_text("model/param_count", str(pc))
+
+    # ── Optimizer + Scheduler ────────────────────────────────────────────────
+    optimizer = build_optimizer(model, cfg["training"])
+    scheduler = build_lr_scheduler(optimizer, cfg["training"])
+
+    # ── Resume ───────────────────────────────────────────────────────────────
+    start_epoch = 0
+    if resume_path:
+        start_epoch = load_checkpoint(resume_path, model, optimizer, scheduler, device)
+
+    # ── Training State ───────────────────────────────────────────────────────
+    total_epochs  = cfg["training"]["epochs"]
+    eval_every    = cfg["training"]["eval_every"]
+    ckpt_dir      = cfg["experiment"]["checkpoint_dir"]
+    best_joint    = 0.0      # best fine_acc + coarse_acc (joint metric)
+    global_step   = 0
+
+    print(f"\n[Train] Starting training: epochs {start_epoch} -> {total_epochs}")
+    print(f"[Train] Loss weights: lambda_0={cfg['loss']['lambda_0']} | "
+          f"lambda_1={cfg['loss']['lambda_1']} | lambda_2={cfg['loss']['lambda_2']}")
+    print(f"[Train] Bandwidth: beta_01={cfg['bandwidth']['channel_01']['beta']} | "
+          f"beta_12={cfg['bandwidth']['channel_12']['beta']}")
+    print(f"[Train] Annealing: {cfg['annealing']['strategy']} | "
+          f"warmup={cfg['annealing']['warmup_epochs']} epochs\n")
+
+    # ── Main Loop ────────────────────────────────────────────────────────────
+    for epoch in range(start_epoch, total_epochs):
+
+        epoch_start = time.time()
+
+        # 1. Update beta annealing for this epoch
+        current_betas = model.update_betas(epoch)
+        writer.add_scalar("annealing/beta_01", current_betas["channel_01"], epoch)
+        writer.add_scalar("annealing/beta_12", current_betas["channel_12"], epoch)
+
+        # 2. Train one epoch
+        train_tracker, global_step = train_one_epoch(
+            model, train_loader, optimizer, writer,
+            epoch, cfg, global_step, device
+        )
+
+        # 3. LR scheduler step
+        scheduler.step()
+        current_lr = optimizer.param_groups[0]["lr"]
+        writer.add_scalar("train/lr", current_lr, epoch)
+
+        # 4. Log epoch-level train metrics
+        train_avg = train_tracker.average()
+        for key, val in train_avg.items():
+            writer.add_scalar(f"train/epoch/{key}", val, epoch)
+
+        # 5. Console output
+        epoch_time = time.time() - epoch_start
+        print(
+            f"Epoch {epoch:03d}/{total_epochs} "
+            f"| loss={train_avg.get('total', 0):.4f} "
+            f"| fine={train_avg.get('fine_acc', 0):.1f}% "
+            f"| coarse={train_avg.get('coarse_acc', 0):.1f}% "
+            f"| bw_01={train_avg.get('bw_01', 0):.4f} "
+            f"| bw_12={train_avg.get('bw_12', 0):.4f} "
+            f"| beta_01={current_betas['channel_01']:.3f} "
+            f"| lr={current_lr:.2e} "
+            f"| {epoch_time:.1f}s"
+        )
+
+        # 6. Validation
+        if epoch % eval_every == 0 or epoch == total_epochs - 1:
+            val_avg = validate(model, val_loader, writer, epoch, device)
+            val_fine   = val_avg.get("fine_acc",   0.0)
+            val_coarse = val_avg.get("coarse_acc", 0.0)
+            joint      = val_fine + val_coarse
+
+            print(
+                f"  [Val] fine={val_fine:.2f}% | coarse={val_coarse:.2f}% "
+                f"| joint={joint:.2f} | best_joint={best_joint:.2f}"
+            )
+
+            # 7. Save best checkpoint
+            if cfg["training"]["save_best"] and joint > best_joint:
+                best_joint = joint
+                save_checkpoint(
+                    model, optimizer, scheduler, epoch,
+                    {"fine_acc": val_fine, "coarse_acc": val_coarse, "joint": joint},
+                    os.path.join(ckpt_dir, "best.pt"),
+                )
+                print(f"  [Ckpt] New best saved (joint={joint:.2f})")
+
+        # 8. Always save last checkpoint (for resuming)
+        save_checkpoint(
+            model, optimizer, scheduler, epoch,
+            {"fine_acc": train_avg.get("fine_acc", 0), "step": global_step},
+            os.path.join(ckpt_dir, "last.pt"),
+        )
+
+    # ── Done ─────────────────────────────────────────────────────────────────
+    writer.close()
+    print(f"\n[Done] Training complete. Best joint accuracy: {best_joint:.2f}")
+    print(f"[Done] Best checkpoint: {os.path.join(ckpt_dir, 'best.pt')}")
+    print(f"[Done] TensorBoard logs: {cfg['experiment']['log_dir']}")
+    print(f"[Done] Run: tensorboard --logdir {cfg['experiment']['log_dir']}")
+
+
+# =============================================================================
+# Entry Point
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(description="Train Fractal Intelligence Network")
+
+    parser.add_argument(
+        "--config", type=str, required=True,
+        help="Path to YAML config file (e.g. configs/fin_cifar100.yaml)"
+    )
+    parser.add_argument(
+        "--ablation", type=str, default=None,
+        help="Ablation name from config.ablations (e.g. no_bandwidth)"
+    )
+    parser.add_argument(
+        "--resume", type=str, default=None,
+        help="Path to checkpoint to resume training from"
+    )
+
+    args = parser.parse_args()
+
+    # Load config
+    with open(args.config) as f:
+        cfg = yaml.safe_load(f)
+
+    # Apply ablation overrides if specified
+    cfg = apply_ablation(cfg, args.ablation)
+
+    # Update experiment name to include ablation tag
+    if args.ablation:
+        cfg["experiment"]["name"] += f"_{args.ablation}"
+
+    # Run training
+    train(cfg, resume_path=args.resume)
+
+
+if __name__ == "__main__":
+    main()
