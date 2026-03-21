@@ -203,7 +203,7 @@ def get_coarse_labels(fine_labels: torch.Tensor) -> torch.Tensor:
     Returns:
         coarse_labels: (B,) superclass indices 0-19
     """
-    return COARSE_LABEL_TENSOR[fine_labels]
+    return COARSE_LABEL_TENSOR[fine_labels.cpu()]
 
 
 # =============================================================================
@@ -259,7 +259,7 @@ def build_lr_scheduler(
             progress = (epoch - warmup_epochs) / max(total_epochs - warmup_epochs, 1)
             return 0.5 * (1.0 + math.cos(math.pi * progress))
 
-    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda) # type: ignore
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
 # =============================================================================
