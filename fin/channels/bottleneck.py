@@ -1,3 +1,4 @@
+import math
 """
 fin/channels/bottleneck.py
 
@@ -134,8 +135,8 @@ class BandwidthBottleneck(nn.Module):
         # Clamp log_sigma to prevent sigma from collapsing to 0 or exploding.
         # sigma in [min_sigma, 10.0] covers all reasonable operating ranges.
         log_sigma  = log_sigma.clamp(
-            min=torch.log(torch.tensor(self.min_sigma)),
-            max=torch.log(torch.tensor(10.0)),
+            min=math.log(self.min_sigma),
+            max=math.log(10.0),
         )
         sigma = log_sigma.exp()
 
@@ -236,8 +237,8 @@ class BandwidthBottleneck(nn.Module):
         h         = self.trunk(z_prev)
         mu        = self.mu_head(h)
         log_sigma = self.log_sigma_head(h).clamp(
-            min=torch.log(torch.tensor(self.min_sigma)),
-            max=torch.log(torch.tensor(10.0)),
+            min=math.log(self.min_sigma),
+            max=math.log(10.0),
         )
         sigma = log_sigma.exp()
         kl    = self._kl_diagonal_gaussian(mu, sigma)
