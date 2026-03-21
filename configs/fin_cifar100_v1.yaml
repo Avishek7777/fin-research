@@ -8,7 +8,7 @@
 # Experiment
 # -----------------------------------------------------------------------------
 experiment:
-  name: "fin_cifar100_v2"
+  name: "fin_cifar100_v1"
   seed: 42
   device: "cuda"                # "cuda" or "cpu"
   log_dir: "runs/"
@@ -66,13 +66,13 @@ architecture:
 bandwidth:
   # Channel between L0 → L1
   channel_01:
-    beta: 64.0                    # was 16.0 — 4x looser ceiling
-    gamma: 0.05                   # was 1.0 — 20x softer penalty
+    beta: 16.0                   # beta_1: budget in nats
+    gamma: 1.0                   # gamma_1: tightness coefficient
 
   # Channel between L1 → L2
   channel_12:
-    beta: 16.0                    # was 4.0 — 4x looser ceiling 
-    gamma: 0.05                   # was 1.0
+    beta: 4.0                    # beta_2: tighter budget (higher abstraction)
+    gamma: 1.0                   # gamma_2: tightness coefficient
 
   # Note: beta_1 > beta_2 enforces increasing compression up the hierarchy.
   # Reducing gamma → looser constraint (FIN degrades toward flat net).
@@ -115,9 +115,9 @@ loss:
 # -----------------------------------------------------------------------------
 annealing:
   enabled: true
-  strategy: "cosine"        # "exponential" or "linear" or "cosine"
-  warmup_epochs: 40              # was 10 — learn first, compress later
-  decay_lambda: 0.02             # was 0.05 — slower tightening
+  strategy: "exponential"        # "exponential" or "linear" or "cosine"
+  warmup_epochs: 10              # Epochs before annealing begins
+  decay_lambda: 0.05             # Controls annealing speed
 
 # -----------------------------------------------------------------------------
 # Training
