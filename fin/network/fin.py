@@ -207,9 +207,11 @@ class FIN(nn.Module):
         )
 
         # ── Level 2 — MLP Apex ────────────────────────────────────────────
+        # channel_12 already compressed d1->d2, so Level2 receives and
+        # operates within d2-dimensional space (refines rather than compresses)
         self.level2 = Level2(
-            in_dim             = d2,       # receives z1 AFTER channel compression
-            out_dim            = d2,       # stays at d2
+            in_dim             = d2,
+            out_dim            = d2,
             hidden_dim         = arch_cfg["level2"]["hidden_dim"],
             num_coarse_classes = num_coarse,
         )
@@ -305,9 +307,9 @@ class FIN(nn.Module):
         z0_refined = self.level0.refine(z0_raw, top_down_msg=down_msg_to_l0)
 
         # Store refined representations
-        out.z0 = z0_refined #type: ignore
-        out.z1 = z1_refined #type: ignore
-        out.z2 = z2 #type: ignore
+        out.z0 = z0_refined
+        out.z1 = z1_refined
+        out.z2 = z2
 
         # ── PHASE 3: Objectives ───────────────────────────────────────────
         # Compute all per-level losses on refined representations.
@@ -317,20 +319,20 @@ class FIN(nn.Module):
         # L0: reconstruction loss on z0_refined
         x_recon       = self.level0.decode(z0_refined)
         loss_0        = self.level0.objective(x, x_recon)
-        out.x_recon   = x_recon #type: ignore
-        out.loss_0    = loss_0 #type: ignore
+        out.x_recon   = x_recon
+        out.loss_0    = loss_0
 
         # L1: fine classification loss on z1_refined
         fine_logits   = self.level1.classify(z1_refined)
         loss_1        = self.level1.objective(fine_logits, fine_labels)
-        out.fine_logits = fine_logits #type: ignore
-        out.loss_1    = loss_1 #type: ignore
+        out.fine_logits = fine_logits
+        out.loss_1    = loss_1
 
         # L2: coarse classification loss on z2
         coarse_logits  = self.level2.classify(z2)
         loss_2         = self.level2.objective(coarse_logits, coarse_labels)
-        out.coarse_logits = coarse_logits #type: ignore
-        out.loss_2     = loss_2 #type: ignore
+        out.coarse_logits = coarse_logits
+        out.loss_2     = loss_2
 
         # ── Assemble L_FIN ────────────────────────────────────────────────
         total_loss, breakdown = self.loss_fn(

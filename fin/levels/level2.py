@@ -127,11 +127,14 @@ class Level2Encoder(nn.Module):
     ):
         super().__init__()
 
-        assert out_dim < in_dim, (
-            f"Level2Encoder requires out_dim ({out_dim}) < in_dim ({in_dim})"
+        assert out_dim <= in_dim, (
+            f"Level2Encoder requires out_dim ({out_dim}) <= in_dim ({in_dim}). "
+            f"Note: when in_dim == out_dim, the channel has already compressed "
+            f"to this space and Level2 refines within it."
         )
 
-        mid_dim = (in_dim + out_dim) // 2   # e.g. (128+32)//2 = 80, rounded to 64
+        # If channel already compressed to out_dim, mid_dim = out_dim (no further squeeze)
+        mid_dim = max((in_dim + out_dim) // 2, out_dim)
 
         # Stage 1: refine in z_1's space
         self.refine_stage = nn.Sequential(
