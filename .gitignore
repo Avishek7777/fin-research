@@ -24,6 +24,7 @@ lib/
 lib64/
 notes/
 paper-prepairation/
+output_eval/
 
 # -----------------------------------------------------------------------------
 # Virtual environments
