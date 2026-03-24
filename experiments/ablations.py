@@ -60,8 +60,8 @@ from scipy import stats
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from train import train, parse_seeds, CIFAR10_MEAN, CIFAR10_STD, CIFAR100_MEAN, CIFAR100_STD
-from evaluate import evaluate, print_results_table
+from train import train_single, parse_seeds, CIFAR10_MEAN, CIFAR10_STD, CIFAR100_MEAN, CIFAR100_STD
+from evaluate import evaluate
 
 
 # =============================================================================
@@ -261,10 +261,10 @@ def run_single_experiment(
     print(f"Training: ablation={ablation}, seed={seed}, dataset={dataset}")
     print(f"{'='*70}")
     
-    train(exp_cfg)
+    train_single(exp_cfg, dataset, seed)
     
     # Evaluate
-    ckpt_path = os.path.join(exp_cfg["experiment"]["checkpoint_dir"], "best.pt")
+    ckpt_path = os.path.join(exp_cfg["experiment"]["checkpoint_dir"], f"best_seed{seed}.pt")
     
     if not os.path.exists(ckpt_path):
         print(f"[Warning] Checkpoint not found: {ckpt_path}")

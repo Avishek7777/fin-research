@@ -1511,10 +1511,11 @@ def evaluate(
         for seed in seeds:
             # Try to find checkpoint for this seed
             patterns = [
-                os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", "best.pt"),
-                os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_seed{seed}", "best.pt"),
-                os.path.join(checkpoint_dir, f"{model_prefix}_seed{seed}", "best.pt"),
-                os.path.join(checkpoint_dir, f"seed{seed}", "best.pt"),
+                os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", f"best_seed{seed}.pt"),
+                os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_seed{seed}", f"best_seed{seed}.pt"),
+                os.path.join(checkpoint_dir, f"{model_prefix}_seed{seed}", f"best_seed{seed}.pt"),
+                os.path.join(checkpoint_dir, f"seed{seed}", f"best_seed{seed}.pt"),
+                os.path.join(checkpoint_dir, f"best_seed{seed}.pt"),
             ]
             seed_path = None
             for p in patterns:

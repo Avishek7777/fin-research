@@ -421,7 +421,7 @@ def train_baseline(
             if dataset_name.lower() == "cifar10":
                 coarse_labels = get_cifar10_coarse_labels(fine_labels).to(device)
             else:
-                coarse_labels = get_coarse_labels(fine_labels).to(device)
+                coarse_labels = get_coarse_labels(fine_labels, dataset_name).to(device)
 
             out = model(x, fine_labels, coarse_labels)
 
