@@ -23,3 +23,9 @@ tqdm>=4.65.0
 
 # Reproducibility
 einops>=0.6.1
+
+# FLOP counting (for model efficiency analysis)
+thop>=0.1.1
+
+# Statistical analysis (for ablations)
+scipy>=1.10.0

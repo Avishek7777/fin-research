@@ -1,27 +1,30 @@
 """
 train.py
 
-FIN Training Script — CIFAR-100
-================================
+FIN Training Script — CIFAR-10/CIFAR-100
+========================================
 
 Usage:
     python train.py --config configs/fin_cifar100.yaml
+    python train.py --config configs/fin_cifar100.yaml --dataset cifar10
+    python train.py --config configs/fin_cifar100.yaml --seeds "1,2,3"
+    python train.py --config configs/fin_cifar100.yaml --dataset both --seeds "1,2,3"
     python train.py --config configs/fin_cifar100.yaml --ablation no_bandwidth
-    python train.py --config configs/fin_cifar100.yaml --resume checkpoints/last.pt
 
 What this script does:
     1. Loads and validates config (with optional ablation overrides)
-    2. Builds CIFAR-100 dataloaders (fine + coarse labels together)
+    2. Builds dataloaders for CIFAR-10, CIFAR-100, or both sequentially
     3. Builds FIN model, optimizer, and LR scheduler
-    4. Runs training loop with:
+    4. Runs multi-seed training (default: 3 seeds)
+    5. Runs training loop with:
          - Beta annealing (once per epoch)
          - Per-batch forward/backward/step
          - Gradient clipping
          - TensorBoard logging (every batch)
          - Epoch-level metric averaging and console output
-    5. Evaluates on validation set every eval_every epochs
-    6. Saves best checkpoint (by joint fine+coarse accuracy)
-    7. Saves last checkpoint (for resuming)
+    6. Evaluates on validation set every eval_every epochs
+    7. Saves best checkpoint per seed (by joint fine+coarse accuracy)
+    8. Computes and prints summary statistics across seeds
 
 CIFAR-100 label handling:
     CIFAR-100 provides both fine labels (0-99) and coarse labels (0-19).
@@ -30,17 +33,23 @@ CIFAR-100 label handling:
         targets_coarse is NOT provided directly — we derive it via
         a fixed fine->coarse mapping (CIFAR100_COARSE_LABELS below).
     This mapping is the official PyTorch/CIFAR-100 superclass assignment.
+
+CIFAR-10 label handling:
+    CIFAR-10 provides only 10 fine classes (0-9).
+    For consistency, we set num_fine_classes=10, num_coarse_classes=10
+    (no hierarchy — fine and coarse are equivalent).
 """
 
 import os
 import sys
+import json
 import math
 import time
 import yaml
 import argparse
 import random
 from copy import deepcopy
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 import numpy as np
 import torch
@@ -77,6 +86,16 @@ CIFAR100_COARSE_LABELS = [
 ]
 
 COARSE_LABEL_TENSOR = torch.tensor(CIFAR100_COARSE_LABELS, dtype=torch.long)
+
+
+# =============================================================================
+# Dataset Normalization Constants
+# =============================================================================
+CIFAR10_MEAN = [0.4914, 0.4822, 0.4465]
+CIFAR10_STD  = [0.2470, 0.2435, 0.2616]
+
+CIFAR100_MEAN = [0.5071, 0.4867, 0.4408]
+CIFAR100_STD  = [0.2675, 0.2565, 0.2761]
 
 
 # =============================================================================
@@ -130,49 +149,75 @@ def apply_ablation(cfg: dict, ablation: Optional[str]) -> dict:
     return cfg
 
 
+def parse_seeds(seeds_str: str) -> List[int]:
+    """Parse comma-separated seed string into list of integers."""
+    return [int(s.strip()) for s in seeds_str.split(",") if s.strip()]
+
+
 # =============================================================================
 # Dataset
 # =============================================================================
 
-def build_dataloaders(data_cfg: dict) -> tuple:
+def build_dataloaders(data_cfg: dict, dataset_name: str = "cifar100") -> tuple:
     """
-    Build CIFAR-100 train and validation dataloaders.
+    Build train and validation dataloaders for CIFAR-10 or CIFAR-100.
 
-    Both fine labels (torchvision default) and coarse labels
-    (derived via CIFAR100_COARSE_LABELS) are provided per batch.
+    Args:
+        data_cfg     : data configuration dict from config file
+        dataset_name : "cifar10" or "cifar100"
 
     Returns:
         train_loader, val_loader
     """
-    # Standard CIFAR-100 augmentation for training
+    # Select normalization constants based on dataset
+    if dataset_name == "cifar10":
+        mean, std = CIFAR10_MEAN, CIFAR10_STD
+    else:  # cifar100
+        mean, std = CIFAR100_MEAN, CIFAR100_STD
+
+    # Standard augmentation for training
     train_transform = T.Compose([
         T.RandomCrop(32, padding=4),
         T.RandomHorizontalFlip(),
         T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
         T.ToTensor(),
-        T.Normalize(mean=[0.5071, 0.4867, 0.4408],
-                    std =[0.2675, 0.2565, 0.2761]),
+        T.Normalize(mean=mean, std=std),
     ])
 
     val_transform = T.Compose([
         T.ToTensor(),
-        T.Normalize(mean=[0.5071, 0.4867, 0.4408],
-                    std =[0.2675, 0.2565, 0.2761]),
+        T.Normalize(mean=mean, std=std),
     ])
 
-    train_dataset = torchvision.datasets.CIFAR100(
-        root      = data_cfg["root"],
-        train     = True,
-        download  = True,
-        transform = train_transform,
-    )
+    # Build datasets based on dataset_name
+    root = data_cfg["root"]
 
-    val_dataset = torchvision.datasets.CIFAR100(
-        root      = data_cfg["root"],
-        train     = False,
-        download  = True,
-        transform = val_transform,
-    )
+    if dataset_name == "cifar10":
+        train_dataset = torchvision.datasets.CIFAR10(
+            root      = root,
+            train     = True,
+            download  = True,
+            transform = train_transform,
+        )
+        val_dataset = torchvision.datasets.CIFAR10(
+            root      = root,
+            train     = False,
+            download  = True,
+            transform = val_transform,
+        )
+    else:  # cifar100
+        train_dataset = torchvision.datasets.CIFAR100(
+            root      = root,
+            train     = True,
+            download  = True,
+            transform = train_transform,
+        )
+        val_dataset = torchvision.datasets.CIFAR100(
+            root      = root,
+            train     = False,
+            download  = True,
+            transform = val_transform,
+        )
 
     train_loader = DataLoader(
         train_dataset,
@@ -194,16 +239,22 @@ def build_dataloaders(data_cfg: dict) -> tuple:
     return train_loader, val_loader
 
 
-def get_coarse_labels(fine_labels: torch.Tensor) -> torch.Tensor:
+def get_coarse_labels(fine_labels: torch.Tensor, dataset_name: str = "cifar100") -> torch.Tensor:
     """
-    Derive coarse labels from fine labels using the official mapping.
+    Derive coarse labels from fine labels.
 
     Args:
-        fine_labels: (B,) fine class indices 0-99
+        fine_labels  : (B,) fine class indices
+        dataset_name  : "cifar10" or "cifar100"
+
     Returns:
-        coarse_labels: (B,) superclass indices 0-19
+        coarse_labels: (B,) superclass indices
     """
-    return COARSE_LABEL_TENSOR[fine_labels.cpu()]
+    if dataset_name == "cifar10":
+        # CIFAR-10: no hierarchy, coarse = fine
+        return fine_labels
+    else:  # cifar100
+        return COARSE_LABEL_TENSOR[fine_labels.cpu()]
 
 
 # =============================================================================
@@ -280,7 +331,7 @@ def save_checkpoint(
         "epoch"       : epoch,
         "model_state" : model.state_dict(),
         "optim_state" : optimizer.state_dict(),
-        "sched_state" : scheduler.state_dict(),
+        "sched_state"  : scheduler.state_dict(),
         "metrics"     : metrics,
     }, path)
 
@@ -313,14 +364,15 @@ def load_checkpoint(
 # =============================================================================
 
 def train_one_epoch(
-    model      : FIN,
-    loader     : DataLoader,
-    optimizer  : optim.Optimizer,
-    writer     : SummaryWriter,
-    epoch      : int,
-    cfg        : dict,
-    global_step: int,
-    device     : torch.device,
+    model       : FIN,
+    loader      : DataLoader,
+    optimizer   : optim.Optimizer,
+    writer      : SummaryWriter,
+    epoch       : int,
+    cfg         : dict,
+    global_step : int,
+    device      : torch.device,
+    dataset_name: str = "cifar100",
 ) -> tuple:
     """
     Train for one epoch.
@@ -338,7 +390,7 @@ def train_one_epoch(
     for x, fine_labels in pbar:
         x            = x.to(device, non_blocking=True)
         fine_labels  = fine_labels.to(device, non_blocking=True)
-        coarse_labels= get_coarse_labels(fine_labels).to(device)
+        coarse_labels= get_coarse_labels(fine_labels, dataset_name).to(device)
 
         # ── Forward ──────────────────────────────────────────────────────
         out = model(x, fine_labels, coarse_labels)
@@ -378,11 +430,12 @@ def train_one_epoch(
 
 @torch.no_grad()
 def validate(
-    model : FIN,
-    loader: DataLoader,
-    writer: SummaryWriter,
-    epoch : int,
-    device: torch.device,
+    model       : FIN,
+    loader      : DataLoader,
+    writer      : SummaryWriter,
+    epoch       : int,
+    device      : torch.device,
+    dataset_name: str = "cifar100",
 ) -> dict:
     """
     Run validation and return averaged metrics.
@@ -396,7 +449,7 @@ def validate(
     for x, fine_labels in tqdm(loader, desc=f"Epoch {epoch:03d} [val]", leave=False):
         x             = x.to(device, non_blocking=True)
         fine_labels   = fine_labels.to(device, non_blocking=True)
-        coarse_labels = get_coarse_labels(fine_labels).to(device)
+        coarse_labels = get_coarse_labels(fine_labels, dataset_name).to(device)
 
         out = model(x, fine_labels, coarse_labels)
         tracker.update(out.breakdown)
@@ -411,23 +464,31 @@ def validate(
 
 
 # =============================================================================
-# Main Training Function
+# Main Training Function (Single Seed/Dataset)
 # =============================================================================
 
-def train(cfg: dict, resume_path: Optional[str] = None):
+def train_single(
+    cfg         : dict,
+    dataset_name: str,
+    seed        : int,
+    resume_path : Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Full training run.
+    Full training run for a single seed and dataset.
 
     Args:
-        cfg        : full config dict (after ablation overrides applied)
-        resume_path: path to checkpoint to resume from, or None
+        cfg         : full config dict (after ablation overrides applied)
+        dataset_name: "cifar10" or "cifar100"
+        seed        : random seed for this run
+        resume_path : path to checkpoint to resume from, or None
+
+    Returns:
+        results dict with metrics for this run
     """
     # ── Setup ────────────────────────────────────────────────────────────────
-    set_seed(cfg["experiment"]["seed"])
+    set_seed(seed)
 
-    # Probe CUDA before committing — P100 (sm_60) is incompatible with
-    # PyTorch builds requiring sm_70+. A small tensor op exposes this
-    # immediately rather than crashing mid-training on BatchNorm.
+    # Probe CUDA before committing
     if torch.cuda.is_available() and cfg["experiment"]["device"] == "cuda":
         try:
             torch.zeros(1).cuda()
@@ -435,27 +496,39 @@ def train(cfg: dict, resume_path: Optional[str] = None):
         except Exception as e:
             print(f"[Setup] CUDA probe failed: {e}")
             print("[Setup] Falling back to CPU.")
-            print("[Setup] Fix: Kaggle Settings -> Accelerator -> GPU T4 x1")
             device = torch.device("cpu")
     else:
         device = torch.device("cpu")
 
     print(f"[Setup] Device: {device}")
 
-    os.makedirs(cfg["experiment"]["log_dir"],        exist_ok=True)
-    os.makedirs(cfg["experiment"]["checkpoint_dir"], exist_ok=True)
+    # Create directories with seed and dataset in path
+    base_name = cfg["experiment"]["name"]
+    log_dir = os.path.join(cfg["experiment"]["log_dir"], f"{base_name}_{dataset_name}_seed{seed}")
+    ckpt_dir = os.path.join(cfg["experiment"]["checkpoint_dir"], f"{base_name}_{dataset_name}_seed{seed}")
+    
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(ckpt_dir, exist_ok=True)
 
-    writer = SummaryWriter(
-        log_dir=os.path.join(cfg["experiment"]["log_dir"], cfg["experiment"]["name"])
-    )
+    writer = SummaryWriter(log_dir=log_dir)
 
     # ── Data ─────────────────────────────────────────────────────────────────
-    print("[Data] Building CIFAR-100 dataloaders...")
-    train_loader, val_loader = build_dataloaders(cfg["data"])
+    print(f"[Data] Building {dataset_name.upper()} dataloaders...")
+    train_loader, val_loader = build_dataloaders(cfg["data"], dataset_name)
     print(f"[Data] Train batches: {len(train_loader)} | Val batches: {len(val_loader)}")
 
     # ── Model ────────────────────────────────────────────────────────────────
+    # Update num_classes based on dataset
+    if dataset_name == "cifar10":
+        cfg["data"]["num_fine_classes"] = 10
+        cfg["data"]["num_coarse_classes"] = 10
+    else:  # cifar100
+        cfg["data"]["num_fine_classes"] = 100
+        cfg["data"]["num_coarse_classes"] = 20
+
     print("[Model] Building FIN...")
+    print(f"[Model] Dataset: {dataset_name} | Fine classes: {cfg['data']['num_fine_classes']} | Coarse classes: {cfg['data']['num_coarse_classes']}")
+    
     model = build_fin(cfg).to(device)
     print(model.architecture_summary())
 
@@ -476,11 +549,11 @@ def train(cfg: dict, resume_path: Optional[str] = None):
     # ── Training State ───────────────────────────────────────────────────────
     total_epochs  = cfg["training"]["epochs"]
     eval_every    = cfg["training"]["eval_every"]
-    ckpt_dir      = cfg["experiment"]["checkpoint_dir"]
     best_joint    = 0.0      # best fine_acc + coarse_acc (joint metric)
     global_step   = 0
 
-    print(f"\n[Train] Starting training: epochs {start_epoch} -> {total_epochs}")
+    print(f"\n[Train] Dataset: {dataset_name} | Seed: {seed}")
+    print(f"[Train] Starting training: epochs {start_epoch} -> {total_epochs}")
     print(f"[Train] Loss weights: lambda_0={cfg['loss']['lambda_0']} | "
           f"lambda_1={cfg['loss']['lambda_1']} | lambda_2={cfg['loss']['lambda_2']}")
     print(f"[Train] Bandwidth: beta_01={cfg['bandwidth']['channel_01']['beta']} | "
@@ -501,7 +574,7 @@ def train(cfg: dict, resume_path: Optional[str] = None):
         # 2. Train one epoch
         train_tracker, global_step = train_one_epoch(
             model, train_loader, optimizer, writer,
-            epoch, cfg, global_step, device
+            epoch, cfg, global_step, device, dataset_name
         )
 
         # 3. LR scheduler step
@@ -530,7 +603,7 @@ def train(cfg: dict, resume_path: Optional[str] = None):
 
         # 6. Validation
         if epoch % eval_every == 0 or epoch == total_epochs - 1:
-            val_avg = validate(model, val_loader, writer, epoch, device)
+            val_avg = validate(model, val_loader, writer, epoch, device, dataset_name)
             val_fine   = val_avg.get("fine_acc",   0.0)
             val_coarse = val_avg.get("coarse_acc", 0.0)
             joint      = val_fine + val_coarse
@@ -546,7 +619,7 @@ def train(cfg: dict, resume_path: Optional[str] = None):
                 save_checkpoint(
                     model, optimizer, scheduler, epoch,
                     {"fine_acc": val_fine, "coarse_acc": val_coarse, "joint": joint},
-                    os.path.join(ckpt_dir, "best.pt"),
+                    os.path.join(ckpt_dir, f"best_seed{seed}.pt"),
                 )
                 print(f"  [Ckpt] New best saved (joint={joint:.2f})")
 
@@ -554,15 +627,180 @@ def train(cfg: dict, resume_path: Optional[str] = None):
         save_checkpoint(
             model, optimizer, scheduler, epoch,
             {"fine_acc": train_avg.get("fine_acc", 0), "step": global_step},
-            os.path.join(ckpt_dir, "last.pt"),
+            os.path.join(ckpt_dir, f"last_seed{seed}.pt"),
         )
 
     # ── Done ─────────────────────────────────────────────────────────────────
     writer.close()
-    print(f"\n[Done] Training complete. Best joint accuracy: {best_joint:.2f}")
-    print(f"[Done] Best checkpoint: {os.path.join(ckpt_dir, 'best.pt')}")
-    print(f"[Done] TensorBoard logs: {cfg['experiment']['log_dir']}")
-    print(f"[Done] Run: tensorboard --logdir {cfg['experiment']['log_dir']}")
+    print(f"\n[Done] Dataset: {dataset_name} | Seed: {seed}")
+    print(f"[Done] Best joint accuracy: {best_joint:.2f}")
+    print(f"[Done] Best checkpoint: {os.path.join(ckpt_dir, f'best_seed{seed}.pt')}")
+    print(f"[Done] TensorBoard logs: {log_dir}")
+
+    # Return results for this run
+    return {
+        "dataset": dataset_name,
+        "seed": seed,
+        "best_joint": best_joint,
+        "ckpt_dir": ckpt_dir,
+        "log_dir": log_dir,
+    }
+
+
+# =============================================================================
+# Multi-Seed Training
+# =============================================================================
+
+def train_multi_seed(
+    cfg     : dict,
+    seeds   : List[int],
+    dataset : str,
+) -> List[Dict[str, Any]]:
+    """
+    Run training for multiple seeds.
+
+    Args:
+        cfg     : full config dict
+        seeds   : list of random seeds
+        dataset : "cifar10", "cifar100", or "both"
+
+    Returns:
+        List of results dicts for each run
+    """
+    all_results = []
+
+    # Determine datasets to run
+    if dataset == "both":
+        datasets_to_run = ["cifar100", "cifar10"]
+    else:
+        datasets_to_run = [dataset]
+
+    for ds in datasets_to_run:
+        print(f"\n{'='*80}")
+        print(f"Starting training for {ds.upper()} dataset")
+        print(f"{'='*80}\n")
+
+        for seed in seeds:
+            print(f"\n{'='*60}")
+            print(f"Starting training: Dataset={ds} | Seed={seed}")
+            print(f"{'='*60}\n")
+
+            result = train_single(cfg, ds, seed)
+            all_results.append(result)
+
+    return all_results
+
+
+def compute_summary_stats(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Compute summary statistics across all runs.
+
+    Args:
+        results: list of result dicts from train_single
+
+    Returns:
+        summary dict with mean ± std for each metric
+    """
+    # Group by dataset
+    by_dataset = {}
+    for r in results:
+        ds = r["dataset"]
+        if ds not in by_dataset:
+            by_dataset[ds] = []
+        by_dataset[ds].append(r)
+
+    summary = {}
+
+    for ds, runs in by_dataset.items():
+        seeds = [r["seed"] for r in runs]
+        joints = [r["best_joint"] for r in runs]
+
+        mean_joint = np.mean(joints)
+        std_joint = np.std(joints)
+
+        summary[ds] = {
+            "seeds": seeds,
+            "joints": joints,
+            "mean_joint": float(mean_joint),
+            "std_joint": float(std_joint),
+            "mean_joint_str": f"{mean_joint:.2f} ± {std_joint:.2f}",
+        }
+
+    return summary
+
+
+def print_summary_table(results: List[Dict[str, Any]], summary: Dict[str, Any]):
+    """
+    Print formatted summary table of all runs.
+    """
+    print("\n" + "=" * 80)
+    print("TRAINING SUMMARY")
+    print("=" * 80)
+
+    # Group by dataset
+    by_dataset = {}
+    for r in results:
+        ds = r["dataset"]
+        if ds not in by_dataset:
+            by_dataset[ds] = []
+        by_dataset[ds].append(r)
+
+    for ds in ["cifar100", "cifar10"]:  # Order: cifar100 first, then cifar10
+        if ds not in by_dataset:
+            continue
+
+        runs = by_dataset[ds]
+        print(f"\n{ds.upper()}:")
+        print("-" * 60)
+        print(f"{'Seed':<10} {'Best Joint Acc':<20}")
+        print("-" * 60)
+
+        for r in runs:
+            print(f"{r['seed']:<10} {r['best_joint']:.2f}%")
+
+        # Print mean ± std
+        s = summary[ds]
+        print("-" * 60)
+        print(f"{'Mean ± Std':<10} {s['mean_joint_str']:<20}")
+        print(f"{'Seeds':<10} {', '.join(map(str, s['seeds']))}")
+
+    print("\n" + "=" * 80)
+
+
+def save_results_json(
+    results: List[Dict[str, Any]],
+    summary: Dict[str, Any],
+    output_path: str,
+    cfg: dict,
+):
+    """
+    Save complete results to JSON file.
+    """
+    output_data = {
+        "config": {
+            "experiment_name": cfg["experiment"]["name"],
+            "loss_weights": cfg["loss"],
+            "bandwidth": cfg["bandwidth"],
+            "architecture": cfg["architecture"],
+        },
+        "summary": summary,
+        "all_runs": [
+            {
+                "dataset": r["dataset"],
+                "seed": r["seed"],
+                "best_joint": r["best_joint"],
+                "ckpt_dir": r["ckpt_dir"],
+                "log_dir": r["log_dir"],
+            }
+            for r in results
+        ],
+    }
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(output_data, f, indent=2)
+
+    print(f"[Results] Saved to {output_path}")
 
 
 # =============================================================================
@@ -575,6 +813,15 @@ def main():
     parser.add_argument(
         "--config", type=str, required=True,
         help="Path to YAML config file (e.g. configs/fin_cifar100.yaml)"
+    )
+    parser.add_argument(
+        "--dataset", type=str, default=None,
+        choices=["cifar10", "cifar100", "both"],
+        help="Dataset to train on. Overrides config default if specified."
+    )
+    parser.add_argument(
+        "--seeds", type=str, default="1,2,3",
+        help="Comma-separated list of random seeds (default: '1,2,3')"
     )
     parser.add_argument(
         "--ablation", type=str, default=None,
@@ -594,12 +841,41 @@ def main():
     # Apply ablation overrides if specified
     cfg = apply_ablation(cfg, args.ablation)
 
-    # Update experiment name to include ablation tag
-    if args.ablation:
-        cfg["experiment"]["name"] += f"_{args.ablation}"
+    # Parse seeds
+    seeds = parse_seeds(args.seeds)
+    print(f"[Setup] Seeds: {seeds}")
 
-    # Run training
-    train(cfg, resume_path=args.resume)
+    # Determine dataset (command-line overrides config)
+    dataset = args.dataset if args.dataset else cfg["data"].get("dataset", "cifar100")
+    print(f"[Setup] Dataset: {dataset}")
+
+    # Update experiment name to include ablation tag and dataset
+    base_name = cfg["experiment"]["name"]
+    if args.ablation:
+        base_name += f"_{args.ablation}"
+    if args.dataset:
+        base_name += f"_{args.dataset}"
+    cfg["experiment"]["name"] = base_name
+
+    # Create base checkpoint and log directories
+    base_ckpt_dir = cfg["experiment"]["checkpoint_dir"]
+    base_log_dir = cfg["experiment"]["log_dir"]
+
+    # Results file path
+    results_path = os.path.join(base_log_dir, f"{base_name}_results.json")
+
+    # Run multi-seed training
+    results = train_multi_seed(cfg, seeds, dataset)
+
+    # Compute and print summary statistics
+    summary = compute_summary_stats(results)
+    print_summary_table(results, summary)
+
+    # Save results to JSON
+    save_results_json(results, summary, results_path, cfg)
+
+    # Print TensorBoard command
+    print(f"\n[Done] Run TensorBoard: tensorboard --logdir {base_log_dir}")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 # =============================================================================
-# FIN Configuration — CIFAR-100
+# FIN Configuration — CIFAR-10
 # Every parameter here maps directly to a definition in the paper.
 # See README.md for the full paper → code mapping.
 # =============================================================================
@@ -8,7 +8,7 @@
 # Experiment
 # -----------------------------------------------------------------------------
 experiment:
-  name: "fin_cifar100"
+  name: "fin_cifar10"
   seeds: [1, 2, 3]
   device: "cuda"                # "cuda" or "cpu"
   log_dir: "runs/"
@@ -18,16 +18,18 @@ experiment:
 # Dataset
 # -----------------------------------------------------------------------------
 data:
-  dataset: "cifar100"
+  dataset: "cifar10"
   root: "./data"
   batch_size: 128
   num_workers: 4
   pin_memory: true
 
-  # CIFAR-100 has 100 fine classes and 20 coarse superclasses.
-  # This natural hierarchy directly validates FIN's multi-level abstraction.
-  num_fine_classes: 100          # L1 objective target
-  num_coarse_classes: 20         # L2 objective target
+  # CIFAR-10 has 10 fine classes. For hierarchical training, we treat
+  # all 10 classes as fine (L1) and also as coarse (L2) for consistency
+  # with the CIFAR-100 structure. This allows fair comparison between
+  # the two datasets using the same model architecture.
+  num_fine_classes: 10          # L1 objective target
+  num_coarse_classes: 10       # L2 objective target
 
 # -----------------------------------------------------------------------------
 # Architecture — Level Hierarchy (Definition 1.2)
@@ -99,10 +101,10 @@ loss:
   # L0: reconstruction loss (MSE between input and decoded output)
   lambda_0: 0.1                  # Lower weight — reconstruction is auxiliary
 
-  # L1: fine-grained classification (CrossEntropy, 100 classes)
+  # L1: fine-grained classification (CrossEntropy, 10 classes)
   lambda_1: 1.0                  # Primary task objective
 
-  # L2: coarse classification (CrossEntropy, 20 superclasses)
+  # L2: coarse classification (CrossEntropy, 10 superclasses)
   lambda_2: 0.5                  # Secondary task objective
 
 # -----------------------------------------------------------------------------

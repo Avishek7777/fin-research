@@ -6,22 +6,35 @@ Baseline Models for FIN Comparison (Section 5.1)
 
 Trains two baselines for the paper's main results table:
 
-    1. ResNet-18 (fine only)
+    1. MobileNetV2 (fine only)
        Standard single-scale deep network, single global objective.
        The architectural foil for FIN — depth and width only, no
        hierarchical structure, no bandwidth constraint.
+       ~3.5M params (vs FIN's 3.82M params)
 
-    2. ResNet-18 + auxiliary coarse head
-       Same ResNet-18 but with a second classification head on the
+    2. MobileNetV2 + auxiliary coarse head
+       Same MobileNetV2 but with a second classification head on the
        penultimate layer predicting coarse superclass labels.
        Closest flat-network approximation of FIN's multi-scale
        objective — has fine + coarse objectives but no bandwidth
        constraint, no self-similarity, no bidirectional feedback.
 
 Usage:
+    # CIFAR-100 only (default)
     python experiments/baselines.py --config configs/fin_cifar100.yaml
+
+    # CIFAR-10 only
+    python experiments/baselines.py --config configs/fin_cifar100.yaml --dataset cifar10
+
+    # Both datasets (train CIFAR-100 first, then CIFAR-10)
+    python experiments/baselines.py --config configs/fin_cifar100.yaml --dataset both
+
+    # Multiple seeds
+    python experiments/baselines.py --config configs/fin_cifar100.yaml --seeds 1,2,3,4,5
+
+    # Specific model variant
     python experiments/baselines.py --config configs/fin_cifar100.yaml \
-                                    --model resnet_aux
+                                    --model mobilenet_fine
 
 Both models use identical training setup to FIN-v2 for fair comparison:
 same optimizer, LR schedule, augmentation, batch size, and epochs.
@@ -33,6 +46,7 @@ import yaml
 import argparse
 import time
 import math
+from typing import Optional, List, Tuple
 
 import torch
 import torch.nn as nn
@@ -42,58 +56,170 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 import torchvision.transforms as T
-from torchvision.models import resnet18
+from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from train import (
-    set_seed, build_dataloaders, get_coarse_labels,
+    set_seed, get_coarse_labels,
     save_checkpoint, CIFAR100_COARSE_LABELS
 )
 
 
 # =============================================================================
-# ResNet-18 Baseline (Fine Only)
+# CIFAR DataLoaders (supports both CIFAR-10 and CIFAR-100)
 # =============================================================================
 
-class ResNet18Fine(nn.Module):
+CIFAR10_MEAN = [0.4914, 0.4822, 0.4465]
+CIFAR10_STD  = [0.2470, 0.2435, 0.2616]
+CIFAR100_MEAN = [0.5071, 0.4867, 0.4408]
+CIFAR100_STD  = [0.2675, 0.2565, 0.2761]
+
+
+def build_dataloaders(
+    data_cfg    : dict,
+    dataset_name: str = "cifar100",
+) -> Tuple[DataLoader, DataLoader]:
     """
-    Standard ResNet-18 for CIFAR-100 fine classification.
+    Build train and validation dataloaders for CIFAR-10 or CIFAR-100.
+
+    Args:
+        data_cfg: Configuration dictionary with batch_size, num_workers, etc.
+        dataset_name: 'cifar10' or 'cifar100'
+
+    Returns:
+        train_loader, val_loader
+    """
+    is_cifar10 = dataset_name.lower() == "cifar10"
+    
+    # Normalization values
+    if is_cifar10:
+        mean, std = CIFAR10_MEAN, CIFAR10_STD
+        DatasetClass = torchvision.datasets.CIFAR10
+    else:
+        mean, std = CIFAR100_MEAN, CIFAR100_STD
+        DatasetClass = torchvision.datasets.CIFAR100
+
+    # Standard augmentation for training
+    train_transform = T.Compose([
+        T.RandomCrop(32, padding=4),
+        T.RandomHorizontalFlip(),
+        T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        T.ToTensor(),
+        T.Normalize(mean=mean, std=std),
+    ])
+
+    val_transform = T.Compose([
+        T.ToTensor(),
+        T.Normalize(mean=mean, std=std),
+    ])
+
+    train_dataset = DatasetClass(
+        root     = data_cfg.get("root", "./data"),
+        train    = True,
+        download = True,
+        transform = train_transform,
+    )
+
+    val_dataset = DatasetClass(
+        root     = data_cfg.get("root", "./data"),
+        train    = False,
+        download = True,
+        transform = val_transform,
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size  = data_cfg["batch_size"],
+        shuffle     = True,
+        num_workers = data_cfg.get("num_workers", 4),
+        pin_memory  = data_cfg.get("pin_memory", True),
+        drop_last   = True,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size  = data_cfg["batch_size"] * 2,
+        shuffle     = False,
+        num_workers = data_cfg.get("num_workers", 4),
+        pin_memory  = data_cfg.get("pin_memory", True),
+    )
+
+    return train_loader, val_loader
+
+
+def get_cifar10_coarse_labels(fine_labels: torch.Tensor) -> torch.Tensor:
+    """
+    For CIFAR-10, coarse labels equal fine labels (no hierarchy).
+    """
+    return fine_labels.clone()
+
+
+# =============================================================================
+# MobileNetV2 Baseline (Fine Only)
+# =============================================================================
+
+class MobileNetV2Fine(nn.Module):
+    """
+    MobileNetV2 for CIFAR classification (fine only).
     Single global objective — the architectural foil for FIN.
-
-    Modifications from ImageNet ResNet-18:
-      - First conv: 3x3, stride 1, no maxpool (standard CIFAR adaptation)
-      - Final FC: 512 -> 100
+    
+    Adapted for CIFAR (32x32 images) by:
+      - Modifying first conv layer from 3x3 stride-2 to maintain more spatial info
+      - Removing the initial maxpool
+      - Final classifier: 1280 -> num_classes
+    
+    ~3.5M params (vs FIN's 3.82M params)
     """
 
-    def __init__(self, num_classes: int = 100):
+    def __init__(
+        self,
+        num_classes      : int = 100,
+        num_coarse_classes: int = 20,
+        is_cifar10       : bool = False,
+    ):
         super().__init__()
-        self.backbone = resnet18(weights=None)
-
-        # CIFAR adaptation — replace 7x7 stride-2 conv + maxpool
-        # with 3x3 stride-1 conv (images are 32x32, not 224x224)
-        self.backbone.conv1 = nn.Conv2d(
-            3, 64, kernel_size=3, stride=1, padding=1, bias=False
+        self.is_cifar10 = is_cifar10
+        self.num_classes = num_classes
+        
+        # Load MobileNetV2 backbone
+        self.backbone = mobilenet_v2(weights=None)
+        
+        # CIFAR adaptation: modify first conv to work better with 32x32 images
+        # Original MobileNetV2 uses 3x3 conv stride-2 + then more layers
+        # For 32x32 images, we use stride=1 to preserve spatial information
+        # Replace the entire first block with a simpler conv
+        from torchvision.ops.misc import ConvNormActivation
+        self.backbone.features[0] = ConvNormActivation(
+            3, 32, kernel_size=3, stride=1, padding=1, norm_layer=nn.BatchNorm2d
         )
-        self.backbone.maxpool = nn.Identity()
-        self.backbone.fc = nn.Linear(512, num_classes)
+        
+        # Update classifier for final classification
+        self.backbone.classifier = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(1280, num_classes),
+        )
 
     def forward(
         self,
-        x: torch.Tensor,
-        fine_labels: torch.Tensor,
+        x            : torch.Tensor,
+        fine_labels  : torch.Tensor,
         coarse_labels: torch.Tensor,
     ) -> dict:
         logits = self.backbone(x)
         loss   = F.cross_entropy(logits, fine_labels)
         acc    = (logits.argmax(1) == fine_labels).float().mean().item() * 100
 
-        # Derive coarse accuracy by mapping fine predictions to coarse
-        fine_preds   = logits.argmax(1).cpu()
-        coarse_preds = torch.tensor(
-            [CIFAR100_COARSE_LABELS[p] for p in fine_preds.tolist()]
-        ).to(coarse_labels.device)
-        coarse_acc = (coarse_preds == coarse_labels).float().mean().item() * 100
+        if self.is_cifar10:
+            # For CIFAR-10, fine_acc = coarse_acc = overall accuracy
+            coarse_acc = acc
+        else:
+            # Derive coarse accuracy by mapping fine predictions to coarse
+            fine_preds   = logits.argmax(1).cpu()
+            coarse_preds = torch.tensor(
+                [CIFAR100_COARSE_LABELS[p] for p in fine_preds.tolist()]
+            ).to(coarse_labels.device)
+            coarse_acc = (coarse_preds == coarse_labels).float().mean().item() * 100
 
         return {
             "loss"      : loss,
@@ -107,17 +233,17 @@ class ResNet18Fine(nn.Module):
 
 
 # =============================================================================
-# ResNet-18 + Auxiliary Coarse Head
+# MobileNetV2 + Auxiliary Coarse Head
 # =============================================================================
 
-class ResNet18Aux(nn.Module):
+class MobileNetV2Aux(nn.Module):
     """
-    ResNet-18 with auxiliary coarse classification head.
+    MobileNetV2 with auxiliary coarse classification head.
 
     Architecture:
-        Shared backbone (ResNet-18 up to penultimate layer)
-        Fine head:   512 -> 100  (fine classification)
-        Coarse head: 512 -> 20   (coarse classification, auxiliary)
+        Shared backbone (MobileNetV2 features + pooling)
+        Fine head:   1280 -> num_fine_classes  (fine classification)
+        Coarse head: 1280 -> num_coarse_classes (coarse classification, auxiliary)
 
     Loss: lambda_fine * CE(fine) + lambda_coarse * CE(coarse)
     with lambda_fine=1.0, lambda_coarse=0.5 matching FIN-v2's weights.
@@ -130,30 +256,37 @@ class ResNet18Aux(nn.Module):
 
     def __init__(
         self,
-        num_fine  : int   = 100,
-        num_coarse: int   = 20,
-        lambda_fine  : float = 1.0,
-        lambda_coarse: float = 0.5,
+        num_fine        : int   = 100,
+        num_coarse      : int   = 20,
+        lambda_fine     : float = 1.0,
+        lambda_coarse   : float = 0.5,
+        is_cifar10      : bool  = False,
     ):
         super().__init__()
 
         self.lambda_fine   = lambda_fine
         self.lambda_coarse = lambda_coarse
+        self.is_cifar10    = is_cifar10
 
-        # Shared backbone — extract features before final FC
-        backbone = resnet18(weights=None)
-        backbone.conv1   = nn.Conv2d(
-            3, 64, kernel_size=3, stride=1, padding=1, bias=False
+        # Shared backbone — extract features before final pooling
+        backbone = mobilenet_v2(weights=None)
+        
+        # CIFAR adaptation: use stride=1 for first conv to preserve spatial info
+        from torchvision.ops.misc import ConvNormActivation
+        backbone.features[0] = ConvNormActivation(
+            3, 32, kernel_size=3, stride=1, padding=1, norm_layer=nn.BatchNorm2d
         )
-        backbone.maxpool = nn.Identity()
-
-        # Remove final FC — we add our own heads
-        self.features = nn.Sequential(*list(backbone.children())[:-1])
+        
+        self.features = backbone.features
         self.pool     = nn.AdaptiveAvgPool2d(1)
 
         # Task-specific heads
-        self.fine_head   = nn.Linear(512, num_fine)
-        self.coarse_head = nn.Linear(512, num_coarse)
+        self.fine_head   = nn.Linear(1280, num_fine)
+        if is_cifar10:
+            # For CIFAR-10, coarse head predicts same classes as fine head
+            self.coarse_head = nn.Linear(1280, num_fine)
+        else:
+            self.coarse_head = nn.Linear(1280, num_coarse)
 
     def forward(
         self,
@@ -163,7 +296,7 @@ class ResNet18Aux(nn.Module):
     ) -> dict:
         # Shared representation
         feat = self.features(x)
-        feat = self.pool(feat).flatten(1)   # (B, 512)
+        feat = self.pool(feat).flatten(1)   # (B, 1280)
 
         # Task heads
         fine_logits   = self.fine_head(feat)
@@ -195,15 +328,20 @@ class ResNet18Aux(nn.Module):
 # =============================================================================
 
 def train_baseline(
-    model     : nn.Module,
-    cfg       : dict,
-    model_name: str,
-):
+    model         : nn.Module,
+    cfg           : dict,
+    model_name    : str,
+    dataset_name  : str = "cifar100",
+    seed          : int = 1,
+) -> dict:
     """
     Train a baseline model using identical setup to FIN-v2.
     Same optimizer, LR schedule, augmentation, and epochs for fair comparison.
+    
+    Returns:
+        dict with best metrics {'fine_acc': float, 'coarse_acc': float, 'joint': float}
     """
-    set_seed(cfg["experiment"]["seed"])
+    set_seed(seed)
 
     # Device
     if torch.cuda.is_available():
@@ -220,8 +358,8 @@ def train_baseline(
 
     model = model.to(device)
 
-    # Data — identical to FIN-v2
-    train_loader, val_loader = build_dataloaders(cfg["data"])
+    # Data
+    train_loader, val_loader = build_dataloaders(cfg["data"], dataset_name)
 
     # Optimizer — identical to FIN-v2
     decay, no_decay = [], []
@@ -251,28 +389,39 @@ def train_baseline(
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     # Logging
-    ckpt_dir = os.path.join("checkpoints", model_name)
+    ckpt_dir = os.path.join(
+        "checkpoints", 
+        f"{model_name}_{dataset_name}_seed{seed}"
+    )
     os.makedirs(ckpt_dir, exist_ok=True)
     writer = SummaryWriter(
-        log_dir=os.path.join(cfg["experiment"]["log_dir"], model_name)
+        log_dir=os.path.join(cfg["experiment"]["log_dir"], 
+                           f"{model_name}_{dataset_name}_seed{seed}")
     )
 
     best_joint = 0.0
-    grad_clip  = cfg["training"]["grad_clip"]
+    best_metrics = {"fine_acc": 0.0, "coarse_acc": 0.0, "joint": 0.0}
+    grad_clip = cfg["training"]["grad_clip"]
 
     print(f"[{model_name}] Starting training: {total_epochs} epochs\n")
 
     for epoch in range(total_epochs):
         # ── Train ─────────────────────────────────────────────────────────
         model.train()
-        train_metrics = {"loss": 0, "fine_acc": 0, "coarse_acc": 0, "joint": 0}
+        train_metrics = {"loss": 0.0, "fine_acc": 0.0, "coarse_acc": 0.0, "joint": 0.0}
         n_batches = 0
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch:03d} [train]", leave=False)
-        for x, fine_labels in pbar:
+        for batch in pbar:
+            # Handle both CIFAR-10 (single label) and CIFAR-100 (single label)
+            x, fine_labels = batch
             x             = x.to(device, non_blocking=True)
             fine_labels   = fine_labels.to(device, non_blocking=True)
-            coarse_labels = get_coarse_labels(fine_labels).to(device)
+            
+            if dataset_name.lower() == "cifar10":
+                coarse_labels = get_cifar10_coarse_labels(fine_labels).to(device)
+            else:
+                coarse_labels = get_coarse_labels(fine_labels).to(device)
 
             out = model(x, fine_labels, coarse_labels)
 
@@ -312,17 +461,22 @@ def train_baseline(
             writer.add_scalar(f"{model_name}/train/{k}", v, epoch)
 
         # ── Validate ──────────────────────────────────────────────────────
-        if epoch % cfg["training"]["eval_every"] == 0 or \
+        if epoch % cfg["training"].get("eval_every", 1) == 0 or \
            epoch == total_epochs - 1:
             model.eval()
-            val_metrics = {"loss": 0, "fine_acc": 0, "coarse_acc": 0, "joint": 0}
+            val_metrics = {"loss": 0.0, "fine_acc": 0.0, "coarse_acc": 0.0, "joint": 0.0}
             n_val = 0
 
             with torch.no_grad():
-                for x, fine_labels in val_loader:
+                for batch in val_loader:
+                    x, fine_labels = batch
                     x             = x.to(device)
                     fine_labels   = fine_labels.to(device)
-                    coarse_labels = get_coarse_labels(fine_labels).to(device)
+                    
+                    if dataset_name.lower() == "cifar10":
+                        coarse_labels = get_cifar10_coarse_labels(fine_labels).to(device)
+                    else:
+                        coarse_labels = get_coarse_labels(fine_labels).to(device)
 
                     out = model(x, fine_labels, coarse_labels)
                     for k in val_metrics:
@@ -346,6 +500,7 @@ def train_baseline(
 
             if joint > best_joint:
                 best_joint = joint
+                best_metrics = {k: val_metrics[k] for k in ["fine_acc", "coarse_acc", "joint"]}
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, val_metrics,
                     os.path.join(ckpt_dir, "best.pt"),
@@ -354,7 +509,108 @@ def train_baseline(
 
     writer.close()
     print(f"\n[{model_name}] Done. Best joint: {best_joint:.2f}")
-    return best_joint
+    return best_metrics
+
+
+def run_model_training(
+    model_class,
+    model_kwargs    : dict,
+    cfg             : dict,
+    model_name      : str,
+    dataset_name    : str,
+    seeds           : List[int],
+) -> dict:
+    """
+    Run training for a single model across multiple seeds.
+    
+    Returns:
+        dict with per-seed results and aggregate statistics
+    """
+    all_results = []
+    
+    for seed in seeds:
+        print(f"\n{'='*60}")
+        print(f"Training {model_name} on {dataset_name} | Seed {seed}/{len(seeds)}")
+        print(f"{'='*60}")
+        
+        # Create fresh model for each seed
+        model = model_class(**model_kwargs)
+        
+        metrics = train_baseline(
+            model, cfg, model_name, dataset_name, seed
+        )
+        metrics["seed"] = seed
+        all_results.append(metrics)
+    
+    # Compute aggregate statistics
+    fine_accs   = [r["fine_acc"]   for r in all_results]
+    coarse_accs = [r["coarse_acc"] for r in all_results]
+    joints      = [r["joint"]      for r in all_results]
+    
+    agg_results = {
+        "per_seed": all_results,
+        "mean_fine_acc"   : sum(fine_accs)   / len(fine_accs),
+        "std_fine_acc"    : _std(fine_accs),
+        "mean_coarse_acc" : sum(coarse_accs) / len(coarse_accs),
+        "std_coarse_acc"  : _std(coarse_accs),
+        "mean_joint"      : sum(joints)       / len(joints),
+        "std_joint"       : _std(joints),
+    }
+    
+    return agg_results
+
+
+def _std(values: List[float]) -> float:
+    """Compute sample standard deviation."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    variance = sum((x - mean) ** 2 for x in values) / (n - 1)
+    return math.sqrt(variance)
+
+
+def print_summary_table(
+    results   : dict,
+    dataset   : str,
+    seeds     : List[int],
+):
+    """Print formatted summary table of results."""
+    n_seeds = len(seeds)
+    
+    print(f"\n{'='*80}")
+    print(f"RESULTS SUMMARY - {dataset.upper()} ({n_seeds} seeds: {seeds})")
+    print(f"{'='*80}")
+    print(f"{'Model':<20} {'Fine Acc':<15} {'Coarse Acc':<15} {'Joint':<15}")
+    print(f"{'-'*80}")
+    
+    for model_name, model_results in results.items():
+        per_seed = model_results["per_seed"]
+        
+        # Print per-seed results
+        for r in per_seed:
+            seed_str = str(r['seed'])
+            print(
+                f"{model_name}_s{seed_str:<15} "
+                f"{r['fine_acc']:>6.2f}%          "
+                f"{r['coarse_acc']:>6.2f}%          "
+                f"{r['joint']:>6.2f}"
+            )
+        
+        # Print aggregate (mean ± std)
+        print(
+            f"{model_name + ' (mean±std)':<20} "
+            f"{model_results['mean_fine_acc']:>6.2f}±{model_results['std_fine_acc']:.2f}     "
+            f"{model_results['mean_coarse_acc']:>6.2f}±{model_results['std_coarse_acc']:.2f}     "
+            f"{model_results['mean_joint']:>6.2f}±{model_results['std_joint']:.2f}"
+        )
+        print(f"{'-'*80}")
+    
+    print("\nNote: For CIFAR-10, fine_acc = coarse_acc = overall accuracy")
+    print(f"\nParameter counts:")
+    print(f"  MobileNetV2-Fine:  ~3.5M params")
+    print(f"  MobileNetV2-Aux:   ~3.5M + aux head params")
+    print(f"  FIN-v2:            3.82M params")
 
 
 # =============================================================================
@@ -362,50 +618,115 @@ def train_baseline(
 # =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Train FIN baselines")
+    parser = argparse.ArgumentParser(description="Train FIN baselines (MobileNetV2)")
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument(
         "--model", type=str, default="both",
-        choices=["resnet_fine", "resnet_aux", "both"],
+        choices=["mobilenet_fine", "mobilenet_aux", "both"],
         help="Which baseline to train"
     )
+    parser.add_argument(
+        "--dataset", type=str, default="cifar100",
+        choices=["cifar10", "cifar100", "both"],
+        help="Which dataset to train on"
+    )
+    parser.add_argument(
+        "--seeds", type=str, default="1,2,3",
+        help="Comma-separated list of random seeds (default: 1,2,3)"
+    )
     args = parser.parse_args()
+
+    # Parse seeds
+    seeds = [int(s.strip()) for s in args.seeds.split(",")]
+    
+    # Parse datasets
+    if args.dataset == "both":
+        datasets = ["cifar100", "cifar10"]
+    else:
+        datasets = [args.dataset]
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    results = {}
+    # Determine class counts based on dataset
+    all_results = {}
 
-    if args.model in ("resnet_fine", "both"):
-        print("\n" + "="*60)
-        print("Baseline 1: ResNet-18 (Fine Only)")
-        print("="*60)
-        model = ResNet18Fine(num_classes=cfg["data"]["num_fine_classes"])
-        joint = train_baseline(model, cfg, "resnet_fine")
-        results["resnet_fine"] = joint
+    for dataset_name in datasets:
+        print(f"\n{'#'*80}")
+        print(f"# DATASET: {dataset_name.upper()}")
+        print(f"{'#'*80}")
+        
+        is_cifar10 = dataset_name.lower() == "cifar10"
+        
+        # CIFAR-10: num_fine = num_coarse = 10
+        # CIFAR-100: num_fine = 100, num_coarse = 20
+        if is_cifar10:
+            num_fine = num_coarse = 10
+        else:
+            num_fine = cfg["data"]["num_fine_classes"]
+            num_coarse = cfg["data"]["num_coarse_classes"]
+        
+        dataset_results = {}
+        
+        if args.model in ("mobilenet_fine", "both"):
+            print("\n" + "="*60)
+            print(f"Baseline 1: MobileNetV2 (Fine Only) [{dataset_name}]")
+            print("="*60)
+            model_kwargs = {
+                "num_classes"        : num_fine,
+                "num_coarse_classes" : num_coarse,
+                "is_cifar10"         : is_cifar10,
+            }
+            results = run_model_training(
+                MobileNetV2Fine, model_kwargs, cfg,
+                "mobilenet_fine", dataset_name, seeds
+            )
+            dataset_results["mobilenet_fine"] = results
 
-    if args.model in ("resnet_aux", "both"):
-        print("\n" + "="*60)
-        print("Baseline 2: ResNet-18 + Auxiliary Coarse Head")
-        print("="*60)
-        model = ResNet18Aux(
-            num_fine   = cfg["data"]["num_fine_classes"],
-            num_coarse = cfg["data"]["num_coarse_classes"],
-            lambda_fine   = cfg["loss"]["lambda_1"],
-            lambda_coarse = cfg["loss"]["lambda_2"],
-        )
-        joint = train_baseline(model, cfg, "resnet_aux")
-        results["resnet_aux"] = joint
+        if args.model in ("mobilenet_aux", "both"):
+            print("\n" + "="*60)
+            print(f"Baseline 2: MobileNetV2 + Auxiliary Coarse Head [{dataset_name}]")
+            print("="*60)
+            model_kwargs = {
+                "num_fine"        : num_fine,
+                "num_coarse"      : num_coarse,
+                "lambda_fine"     : cfg["loss"]["lambda_1"],
+                "lambda_coarse"   : cfg["loss"]["lambda_2"],
+                "is_cifar10"      : is_cifar10,
+            }
+            results = run_model_training(
+                MobileNetV2Aux, model_kwargs, cfg,
+                "mobilenet_aux", dataset_name, seeds
+            )
+            dataset_results["mobilenet_aux"] = results
+        
+        # Print summary for this dataset
+        print_summary_table(dataset_results, dataset_name, seeds)
+        
+        # Store for overall summary
+        all_results[dataset_name] = dataset_results
 
-    print("\n" + "="*60)
-    print("BASELINE RESULTS SUMMARY")
-    print("="*60)
-    for name, joint in results.items():
-        print(f"  {name:<20}: joint={joint:.2f}")
-    print()
-    print("Compare against:")
+    # Final summary
+    print(f"\n{'='*80}")
+    print("FINAL BASELINE COMPARISON")
+    print("="*80)
+    
+    for dataset_name, dataset_results in all_results.items():
+        print(f"\n--- {dataset_name.upper()} ---")
+        for model_name, results in dataset_results.items():
+            print(
+                f"  {model_name:<20}: "
+                f"Fine={results['mean_fine_acc']:.2f}±{results['std_fine_acc']:.2f}%  "
+                f"Coarse={results['mean_coarse_acc']:.2f}±{results['std_coarse_acc']:.2f}%  "
+                f"Joint={results['mean_joint']:.2f}±{results['std_joint']:.2f}"
+            )
+    
+    print("\n" + "="*80)
+    print("REFERENCE (from paper):")
+    print("="*80)
     print("  FIN-v2 (full)      : joint=106.80, CKA=0.625, 3.82M params")
     print("  FIN-v2 no bandwidth: joint=115.75, CKA=0.622")
+    print("\n  MobileNetV2 baselines are ~3.5M params (comparable to FIN's 3.82M)")
 
 
 if __name__ == "__main__":
