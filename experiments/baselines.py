@@ -608,8 +608,8 @@ def print_summary_table(
     
     print("\nNote: For CIFAR-10, fine_acc = coarse_acc = overall accuracy")
     print(f"\nParameter counts:")
-    print(f"  MobileNetV2-Fine:  ~3.5M params")
-    print(f"  MobileNetV2-Aux:   ~3.5M + aux head params")
+    print(f"  MobileNetV2-Fine:  ~2.35M params")
+    print(f"  MobileNetV2-Aux:   ~2.35M + aux head params")
     print(f"  FIN-v2:            3.82M params")
 
 
