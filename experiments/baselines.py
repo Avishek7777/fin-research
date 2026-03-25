@@ -726,7 +726,7 @@ def main():
     print("="*80)
     print("  FIN-v2 (full)      : joint=106.80, CKA=0.625, 3.82M params")
     print("  FIN-v2 no bandwidth: joint=115.75, CKA=0.622")
-    print("\n  MobileNetV2 baselines are ~3.5M params (comparable to FIN's 3.82M)")
+    print("\n  MobileNetV2 baselines are ~2.35M params (comparable to FIN's 3.82M)")
 
 
 if __name__ == "__main__":

@@ -752,16 +752,51 @@ Examples:
         dataset_output = os.path.join(args.output_dir, dataset)
         os.makedirs(dataset_output, exist_ok=True)
         
-        # Run full model baseline for each seed
+        # Load full model baseline from existing train.py checkpoints
         baseline_results = []
         for seed in seeds:
-            result = run_single_experiment(
-                cfg=cfg,
-                ablation="full",
-                seed=seed,
-                output_dir=dataset_output,
-                dataset=dataset,
+            exp_name = cfg["experiment"]["name"]
+            base_ckpt_dir = cfg["experiment"]["checkpoint_dir"]
+            
+            # train.py with --dataset both names checkpoints:
+            # {base_ckpt_dir}/{exp_name}_both/{exp_name}_both_{dataset}_seed{N}/best_seed{N}.pt
+            ckpt_path = os.path.join(
+                base_ckpt_dir,
+                f"{exp_name}_both",
+                f"{exp_name}_both_{dataset}_seed{seed}",
+                f"best_seed{seed}.pt"
             )
+            # Fallback: flat structure
+            if not os.path.exists(ckpt_path):
+                ckpt_path = os.path.join(
+                    base_ckpt_dir,
+                    f"{exp_name}_{dataset}_seed{seed}",
+                    f"best_seed{seed}.pt"
+                )
+
+            if os.path.exists(ckpt_path):
+                import torch
+                ckpt = torch.load(ckpt_path, map_location="cpu")
+                metrics = ckpt.get("metrics", {})
+                print(f"[Baseline] Loaded FIN full checkpoint: {ckpt_path}")
+                result = {
+                    "ablation": "full",
+                    "seed": seed,
+                    "dataset": dataset,
+                    "fine_acc": metrics.get("fine_acc", 0.0),
+                    "coarse_acc": metrics.get("coarse_acc", 0.0),
+                    "joint_acc": metrics.get("joint", 0.0),
+                    "params_M": metrics.get("params_M", 0),
+                }
+            else:
+                print(f"[Warning] Baseline checkpoint not found at {ckpt_path}, retraining...")
+                result = run_single_experiment(
+                    cfg=cfg,
+                    ablation="full",
+                    seed=seed,
+                    output_dir=dataset_output,
+                    dataset=dataset,
+                )
             baseline_results.append(result)
             all_results.append(result)
         
