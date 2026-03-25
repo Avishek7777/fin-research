@@ -237,7 +237,7 @@ class FIN(nn.Module):
         }
 
         # Store dims for external access (e.g. evaluation, t-SNE)
-        self.d0, self.d1, self.d2 = d0, d1, 
+        self.d0, self.d1, self.d2 = d0, d1, d2
 
         # ── Single-level mode (no_hierarchy_flat ablation) ────────────────
         self.single_level = arch_cfg.get("single_level", False)
