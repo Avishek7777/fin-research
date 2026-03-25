@@ -156,81 +156,76 @@ class Level1Encoder(nn.Module):
         n_heads   : int   = 4,
         num_layers: int   = 2,
         dropout   : float = 0.1,
+        mlp_mode  : bool  = False,
     ):
         super().__init__()
 
-        assert in_dim % n_patches == 0, (
-            f"in_dim ({in_dim}) must be divisible by n_patches ({n_patches}). "
-            f"Got {in_dim} % {n_patches} = {in_dim % n_patches}."
-        )
+        self.mlp_mode  = mlp_mode
+        self.out_dim   = out_dim
 
-        self.n_patches  = n_patches
-        self.token_dim  = in_dim // n_patches   # dimension of each raw token
-        self.embed_dim  = embed_dim
+        if mlp_mode:
+            # no_self_similarity ablation: replace Transformer with plain MLP
+            # Same parameter budget as Transformer (roughly), no self-attention
+            hidden = (in_dim + out_dim) * 2
+            self.mlp = nn.Sequential(
+                nn.Linear(in_dim, hidden),
+                nn.LayerNorm(hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden, hidden // 2),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden // 2, out_dim),
+                nn.LayerNorm(out_dim),
+            )
+        else:
+            assert in_dim % n_patches == 0, (
+                f"in_dim ({in_dim}) must be divisible by n_patches ({n_patches}). "
+                f"Got {in_dim} % {n_patches} = {in_dim % n_patches}."
+            )
 
-        # Project raw tokens to embed_dim
-        self.token_proj = nn.Sequential(
-            nn.Linear(self.token_dim, embed_dim),
-            nn.LayerNorm(embed_dim),
-        )
+            self.n_patches  = n_patches
+            self.token_dim  = in_dim // n_patches
+            self.embed_dim  = embed_dim
 
-        # Learnable [CLS] token — aggregates global information
-        # Shape: (1, 1, embed_dim) — broadcasted over batch
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
+            self.token_proj = nn.Sequential(
+                nn.Linear(self.token_dim, embed_dim),
+                nn.LayerNorm(embed_dim),
+            )
 
-        # Learnable positional embeddings for n_patches + 1 (CLS) positions
-        self.pos_embed = nn.Parameter(torch.zeros(1, n_patches + 1, embed_dim))
-        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+            nn.init.trunc_normal_(self.cls_token, std=0.02)
 
-        # Transformer blocks
-        self.blocks = nn.ModuleList([
-            TransformerBlock(dim=embed_dim, n_heads=n_heads, dropout=dropout)
-            for _ in range(num_layers)
-        ])
+            self.pos_embed = nn.Parameter(torch.zeros(1, n_patches + 1, embed_dim))
+            nn.init.trunc_normal_(self.pos_embed, std=0.02)
 
-        self.norm = nn.LayerNorm(embed_dim)
+            self.blocks = nn.ModuleList([
+                TransformerBlock(dim=embed_dim, n_heads=n_heads, dropout=dropout)
+                for _ in range(num_layers)
+            ])
 
-        # Project CLS token to d1
-        self.out_proj = nn.Sequential(
-            nn.Linear(embed_dim, out_dim),
-            nn.LayerNorm(out_dim),
-        )
+            self.norm = nn.LayerNorm(embed_dim)
 
-        self.out_dim = out_dim
+            self.out_proj = nn.Sequential(
+                nn.Linear(embed_dim, out_dim),
+                nn.LayerNorm(out_dim),
+            )
 
     def forward(self, z_0: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            z_0: shape (B, d0)
-        Returns:
-            z_1: shape (B, d1)
-        """
+        if self.mlp_mode:
+            return self.mlp(z_0)
+
         B = z_0.size(0)
-
-        # 1. Split into token sequence: (B, d0) -> (B, n_patches, token_dim)
         tokens = z_0.view(B, self.n_patches, self.token_dim)
-
-        # 2. Project to embed_dim: (B, n_patches, token_dim) -> (B, n_patches, embed_dim)
         tokens = self.token_proj(tokens)
-
-        # 3. Prepend CLS token: (B, 1, embed_dim)
         cls = self.cls_token.expand(B, -1, -1)
-        tokens = torch.cat([cls, tokens], dim=1)    # (B, n_patches+1, embed_dim)
-
-        # 4. Add positional embedding
+        tokens = torch.cat([cls, tokens], dim=1)
         tokens = tokens + self.pos_embed
-
-        # 5. Pass through Transformer blocks
         for block in self.blocks:
             tokens = block(tokens)
-
         tokens = self.norm(tokens)
-
-        # 6. Extract CLS token and project to d1
-        cls_out = tokens[:, 0, :]                   # (B, embed_dim)
-        z_1 = self.out_proj(cls_out)                # (B, d1)
-
+        cls_out = tokens[:, 0, :]
+        z_1 = self.out_proj(cls_out)
         return z_1
 
 
@@ -310,6 +305,7 @@ class Level1(nn.Module):
         feedback_dim    : int   = 32,
         alpha_init      : float = 0.1,
         feedback_enabled: bool  = True,
+        mlp_mode        : bool = False,
     ):
         super().__init__()
 
@@ -326,6 +322,7 @@ class Level1(nn.Module):
             n_heads   = n_heads,
             num_layers= num_layers,
             dropout   = dropout,
+            mlp_mode  = mlp_mode,
         )
 
         # O_1: fine-grained classification head

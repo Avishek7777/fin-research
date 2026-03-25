@@ -82,7 +82,7 @@ ABLATIONS = [
         "component"  : "per_level_objectives",
     },
     {
-        "name"       : "no_top_down",
+        "name"       : "no_top_down_feedback",
         "description": "Disable feedback (feedback_enabled=false)",
         "hypothesis" : "Lower level representations degrade without top-down guidance",
         "component"  : "top_down_feedback",
@@ -149,7 +149,7 @@ def get_ablation_overrides(ablation_name: str, dataset: str = "cifar100") -> Dic
             "loss.lambda_2": 0.0,
         }
     
-    elif ablation_name == "no_top_down":
+    elif ablation_name == "no_top_down_feedback":
         overrides = {
             "feedback.enabled": False,
         }
@@ -161,7 +161,7 @@ def get_ablation_overrides(ablation_name: str, dataset: str = "cifar100") -> Dic
             "architecture.single_level": True,
             "architecture.level0.out_dim": 512,
             "loss.lambda_0": 0.0,
-            "loss.lambda_2": 0.0,
+            "loss.lambda_2": 0.5,
             "loss.lambda_1": 1.0,
         }
     
@@ -175,10 +175,7 @@ def get_ablation_overrides(ablation_name: str, dataset: str = "cifar100") -> Dic
     elif ablation_name == "no_self_similarity":
         # This requires code changes in architecture, handled separately
         overrides = {
-            "architecture.self_similar": False,
-            "architecture.level0.type": "cnn",
-            "architecture.level1.type": "mlp",
-            "architecture.level2.type": "mlp",
+            "architecture.level1.mlp_mode": True,
         }
     
     return overrides

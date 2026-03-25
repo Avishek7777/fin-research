@@ -150,11 +150,21 @@ ablations:
 
   no_per_level_objectives:
     loss.lambda_0: 0.0
-    loss.lambda_2: 0.0           # Only L1 fine classification remains
+    loss.lambda_2: 0.0
 
-  no_top_down_feedback:
+  no_top_down:
     feedback.enabled: false
 
+  no_hierarchy_flat:
+    architecture.single_level: true
+    loss.lambda_0: 0.0
+    loss.lambda_2: 0.5
+    loss.lambda_1: 1.0
+
+  fixed_bandwidth:
+    annealing.enabled: false
+    bandwidth.channel_01.beta: 64.0
+    bandwidth.channel_12.beta: 16.0
+
   no_self_similarity:
-    # Handled in code — uses bespoke level designs instead of shared template
-    architecture.self_similar: false
+    architecture.level1.mlp_mode: true

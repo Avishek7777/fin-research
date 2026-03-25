@@ -197,6 +197,7 @@ class FIN(nn.Module):
             feedback_dim     = d2,         # receives top-down from L2
             alpha_init       = alpha_init,
             feedback_enabled = feedback_enabled,
+            mlp_mode         = arch_cfg["level1"].get("mlp_mode", False),
         )
 
         # ── Channel L1 -> L2 ──────────────────────────────────────────────
@@ -236,7 +237,14 @@ class FIN(nn.Module):
         }
 
         # Store dims for external access (e.g. evaluation, t-SNE)
-        self.d0, self.d1, self.d2 = d0, d1, d2
+        self.d0, self.d1, self.d2 = d0, d1, 
+
+        # ── Single-level mode (no_hierarchy_flat ablation) ────────────────
+        self.single_level = arch_cfg.get("single_level", False)
+        if self.single_level:
+            # Replace full hierarchy with a direct fine+coarse classifier on z0
+            self.flat_fine_head   = nn.Linear(d0, num_fine)
+            self.flat_coarse_head = nn.Linear(d0, num_coarse)
 
     # =========================================================================
     # Forward Pass
@@ -244,112 +252,108 @@ class FIN(nn.Module):
 
     def forward(
         self,
-        x            : torch.Tensor,   # (B, 3, 32, 32) raw pixels
-        fine_labels  : torch.Tensor,   # (B,) CIFAR-100 fine labels
-        coarse_labels: torch.Tensor,   # (B,) CIFAR-100 coarse labels
+        x            : torch.Tensor,
+        fine_labels  : torch.Tensor,
+        coarse_labels: torch.Tensor,
     ) -> FINOutput:
-        """
-        Complete FIN forward pass — three phases.
-
-        Args:
-            x            : raw pixel input
-            fine_labels  : CIFAR-100 fine class indices (0-99)
-            coarse_labels: CIFAR-100 coarse class indices (0-19)
-
-        Returns:
-            FINOutput with all representations, logits, losses, and breakdown
-        """
         out = FINOutput()
 
-        # ── PHASE 1: Bottom-Up ────────────────────────────────────────────
-        # Each level encodes its input; channels compress between levels.
-        # Top-down feedback is None here — we haven't computed higher
-        # levels yet. Representations are "raw" bottom-up encodings.
+        # ── Single-level flat mode (no_hierarchy_flat ablation) ───────────
+        if self.single_level:
+            z0 = self.level0.encode(x)
+            fine_logits   = self.flat_fine_head(z0)
+            coarse_logits = self.flat_coarse_head(z0)
 
-        # L0: pixels -> z0_raw
+            loss_1 = self.level1.objective(fine_logits, fine_labels)
+            loss_2 = self.level2.objective(coarse_logits, coarse_labels)
+            loss_0 = torch.tensor(0.0, device=x.device)
+            kl_01  = torch.tensor(0.0, device=x.device)
+            kl_12  = torch.tensor(0.0, device=x.device)
+
+            out.z0            = z0
+            out.z1            = z0   # same rep, no hierarchy
+            out.z2            = z0
+            out.fine_logits   = fine_logits
+            out.coarse_logits = coarse_logits
+            out.loss_0        = loss_0
+            out.loss_1        = loss_1
+            out.loss_2        = loss_2
+            out.kl_loss_01    = kl_01
+            out.kl_loss_12    = kl_12
+
+            total_loss, breakdown = self.loss_fn(
+                loss_0        = loss_0,
+                loss_1        = loss_1,
+                loss_2        = loss_2,
+                kl_loss_01    = kl_01,
+                kl_loss_12    = kl_12,
+                fine_logits   = fine_logits,
+                coarse_logits = coarse_logits,
+                fine_labels   = fine_labels,
+                coarse_labels = coarse_labels,
+            )
+            out.total_loss = total_loss
+            out.breakdown  = breakdown
+            return out
+
+        # ── Normal 3-level forward ────────────────────────────────────────
         z0_raw = self.level0.encode(x)
 
-        # Channel 01: z0_raw -> z0_compressed (enforces bandwidth beta_1)
         z0_compressed, kl_01 = self.channel_01(
             z0_raw,
             beta_override=self._current_betas["channel_01"],
         )
 
-        # L1: z0_compressed -> z1_raw (no top-down yet)
         z1_raw = self.level1.encode(z0_compressed)
 
-        # Channel 12: z1_raw -> z1_compressed (enforces bandwidth beta_2)
         z1_compressed, kl_12 = self.channel_12(
             z1_raw,
             beta_override=self._current_betas["channel_12"],
         )
 
-        # L2: z1_compressed -> z2 (apex — no channel above)
         z2 = self.level2.encode(z1_compressed)
 
-        # Store bandwidth losses
         out.kl_loss_01 = kl_01
         out.kl_loss_12 = kl_12
 
-        # ── PHASE 2: Top-Down ─────────────────────────────────────────────
-        # Feedback flows apex -> base. Each level refines its representation
-        # using a constraint/prior from the level above.
-        # Implements Definition 1.4: z~_{k-1} = z_{k-1} + alpha_k * g_k(z_k)
-
-        # L2 is apex — no refinement, but sends message down to L1
         down_msg_to_l1 = self.level2.downward_message(z2)
-
-        # L1 refines z1_raw using L2's message, then sends message to L0
-        z1_refined = self.level1.refine(z1_raw, top_down_msg=down_msg_to_l1)
+        z1_refined     = self.level1.refine(z1_raw, top_down_msg=down_msg_to_l1)
         down_msg_to_l0 = self.level1.downward_message(z1_refined)
+        z0_refined     = self.level0.refine(z0_raw, top_down_msg=down_msg_to_l0)
 
-        # L0 refines z0_raw using L1's message
-        z0_refined = self.level0.refine(z0_raw, top_down_msg=down_msg_to_l0)
-
-        # Store refined representations
         out.z0 = z0_refined
         out.z1 = z1_refined
         out.z2 = z2
 
-        # ── PHASE 3: Objectives ───────────────────────────────────────────
-        # Compute all per-level losses on refined representations.
-        # Each level's objective is evaluated on the representation that
-        # has been shaped by both bottom-up signal AND top-down constraint.
-
-        # L0: reconstruction loss on z0_refined
         x_recon       = self.level0.decode(z0_refined)
         loss_0        = self.level0.objective(x, x_recon)
         out.x_recon   = x_recon
         out.loss_0    = loss_0
 
-        # L1: fine classification loss on z1_refined
         fine_logits   = self.level1.classify(z1_refined)
         loss_1        = self.level1.objective(fine_logits, fine_labels)
         out.fine_logits = fine_logits
         out.loss_1    = loss_1
 
-        # L2: coarse classification loss on z2
         coarse_logits  = self.level2.classify(z2)
         loss_2         = self.level2.objective(coarse_logits, coarse_labels)
         out.coarse_logits = coarse_logits
         out.loss_2     = loss_2
 
-        # ── Assemble L_FIN ────────────────────────────────────────────────
         total_loss, breakdown = self.loss_fn(
-            loss_0       = loss_0,
-            loss_1       = loss_1,
-            loss_2       = loss_2,
-            kl_loss_01   = kl_01,
-            kl_loss_12   = kl_12,
-            fine_logits  = fine_logits,
-            coarse_logits= coarse_logits,
-            fine_labels  = fine_labels,
-            coarse_labels= coarse_labels,
+            loss_0        = loss_0,
+            loss_1        = loss_1,
+            loss_2        = loss_2,
+            kl_loss_01    = kl_01,
+            kl_loss_12    = kl_12,
+            fine_logits   = fine_logits,
+            coarse_logits = coarse_logits,
+            fine_labels   = fine_labels,
+            coarse_labels = coarse_labels,
         )
 
         out.total_loss = total_loss
         out.breakdown  = breakdown
-
         return out
 
     # =========================================================================
