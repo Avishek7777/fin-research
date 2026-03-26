@@ -1638,9 +1638,19 @@ def generate_markdown_report(
     md_lines.append("## CKA Representation Similarity\n")
     md_lines.append("Mean ± std across seeds:\n")
     
-    for model_name, results in seed_results.items():
+    for model_name, results_or_dict in seed_results.items():
+        if not results_or_dict:
+            continue
+        
+        # Handle nested structure: {dataset -> [results]}
+        if isinstance(results_or_dict, dict):
+            results = list(results_or_dict.values())[0]
+        else:
+            results = results_or_dict
+        
         if not results:
             continue
+        
         stats = compute_multi_seed_statistics(results)
         md_lines.append(f"### {model_name}\n")
         md_lines.append(f"- CKA(L0, L1): {stats['cka']['01']['mean']:.3f} ± {stats['cka']['01']['std']:.3f}")
@@ -1652,9 +1662,19 @@ def generate_markdown_report(
     md_lines.append("| Model | ID(L0) | ID(L1) | ID(L2) |")
     md_lines.append("|-------|--------|--------|-------|")
     
-    for model_name, results in seed_results.items():
+    for model_name, results_or_dict in seed_results.items():
+        if not results_or_dict:
+            continue
+        
+        # Handle nested structure: {dataset -> [results]}
+        if isinstance(results_or_dict, dict):
+            results = list(results_or_dict.values())[0]
+        else:
+            results = results_or_dict
+        
         if not results:
             continue
+        
         stats = compute_multi_seed_statistics(results)
         id_z0 = f"{stats['intrinsic_dim']['z0']['mean']:.2f} ± {stats['intrinsic_dim']['z0']['std']:.2f}"
         id_z1 = f"{stats['intrinsic_dim']['z1']['mean']:.2f} ± {stats['intrinsic_dim']['z1']['std']:.2f}"
@@ -1731,53 +1751,61 @@ def evaluate(
         return dataloader_cache[ds]
 
     
-    # If checkpoint_dir provided, look for seed-specific checkpoints
-    if checkpoint_dir:
-        for seed in seeds:
-            # Try to find checkpoint for this seed
-            patterns = [
-                # Actual FIN structure from train.py
-                os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_cifar100_cifar100_seed{seed}", f"best_seed{seed}.pt"),
-                os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_cifar10_cifar10_seed{seed}", f"best_seed{seed}.pt"),
-                # Baseline structures (baselines.py saves as best.pt)
-                os.path.join(checkpoint_dir, f"mobilenet_fine_cifar100_seed{seed}", "best.pt"),
-                os.path.join(checkpoint_dir, f"mobilenet_aux_cifar100_seed{seed}", "best.pt"),
-                os.path.join(checkpoint_dir, f"mobilenet_fine_cifar10_seed{seed}", "best.pt"),
-                os.path.join(checkpoint_dir, f"mobilenet_aux_cifar10_seed{seed}", "best.pt"),
-                # Fallback patterns
-                os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", f"best_seed{seed}.pt"),
-                os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_seed{seed}", f"best_seed{seed}.pt"),
-                os.path.join(checkpoint_dir, f"{model_prefix}_seed{seed}", f"best_seed{seed}.pt"),
-                os.path.join(checkpoint_dir, f"seed{seed}", f"best_seed{seed}.pt"),
-                os.path.join(checkpoint_dir, f"best_seed{seed}.pt"),
-            ]
-            seed_path = None
-            for p in patterns:
-                if os.path.exists(p):
-                    seed_path = p
-                    print(f"[Found] Checkpoint for seed {seed}: {p}")
-                    break
-            
-            if seed_path:
-                model_name = f"{model_prefix}_seed{seed}"
-                all_seed_results[model_name] = {}
+    # If checkpoint_dir provided, auto-discover all models and seeds
+    if checkpoint_dir and os.path.exists(checkpoint_dir):
+        # Find all checkpoint directories with seed numbers
+        import re
+        
+        model_checkpoints = {}  # {model_name: {seed: path}}
+        
+        # List all directories in checkpoint_dir
+        dirs = [d for d in os.listdir(checkpoint_dir) 
+                if os.path.isdir(os.path.join(checkpoint_dir, d))]
+        
+        for directory in dirs:
+            # Extract seed number from directory name (e.g., "fin_cifar100_cifar100_cifar100_seed1" -> seed=1)
+            seed_match = re.search(r'seed(\d+)', directory)
+            if seed_match:
+                seed = int(seed_match.group(1))
+                # Extract model name by removing the seed part
+                # Examples: "fin_cifar100_cifar100_cifar100_seed1" -> "fin_cifar100"
+                #           "mobilenet_fine_cifar100_seed1" -> "mobilenet_fine"
+                model_name = re.sub(r'_seed\d+$', '', directory)
+                
+                if model_name not in model_checkpoints:
+                    model_checkpoints[model_name] = {}
+                
+                # Try both best_seed{N}.pt and best.pt patterns
+                ckpt_path = os.path.join(checkpoint_dir, directory, f"best_seed{seed}.pt")
+                if not os.path.exists(ckpt_path):
+                    ckpt_path = os.path.join(checkpoint_dir, directory, "best.pt")
+                
+                if os.path.exists(ckpt_path):
+                    model_checkpoints[model_name][seed] = ckpt_path
+                    print(f"[Found] {model_name} seed {seed}: {ckpt_path}")
+        
+        # Evaluate each model and seed
+        for model_name, seed_paths in model_checkpoints.items():
+            for seed, ckpt_path in sorted(seed_paths.items()):
+                if model_name not in all_seed_results:
+                    all_seed_results[model_name] = {}
                 
                 for ds in datasets_to_eval:
                     print(f"\n{'='*60}")
-                    print(f"Evaluating {model_name} on {ds.upper()}")
-                    print(f"Checkpoint: {seed_path}")
+                    print(f"Evaluating {model_name} (seed {seed}) on {ds.upper()}")
+                    print(f"Checkpoint: {ckpt_path}")
                     print("=" * 60)
                     
                     # Use cached dataloader
                     val_loader = get_cached_dataloader(ds)
                     
                     result = evaluate_single_seed(
-                        cfg, seed_path, ds, device, max_samples, val_loader=val_loader
+                        cfg, ckpt_path, ds, device, max_samples, val_loader=val_loader
                     )
                     
-                    if model_name not in all_seed_results:
-                        all_seed_results[model_name] = {}
-                    all_seed_results[model_name][ds] = [result]
+                    if ds not in all_seed_results[model_name]:
+                        all_seed_results[model_name][ds] = []
+                    all_seed_results[model_name][ds].append(result)
                     
                     # Print single-seed report
                     print_representation_report(
@@ -1787,10 +1815,7 @@ def evaluate(
                         None,  # model not available after eval
                         dataset=ds,
                     )
-            else:
-                print(f"[Warning] No checkpoint found for seed {seed}. Tried patterns:")
-                for p in patterns:
-                    print(f"  - {p}")
+
     
     # If single checkpoint provided
     elif checkpoint_path and os.path.exists(checkpoint_path):
