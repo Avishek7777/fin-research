@@ -415,7 +415,9 @@ def find_checkpoint_paths(
             # Try various patterns
             patterns = [
                 # Actual train.py output (dataset repeated)
-                os.path.join(checkpoint_dir, f"{model_prefix}_{model_prefix}_{model_prefix}_seed{seed}", f"best_seed{seed}.pt"),
+                # Correct patterns for FIN
+                os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_cifar100_seed{seed}", f"best_seed{seed}.pt"),
+                os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_cifar10_seed{seed}", f"best_seed{seed}.pt"),
                 # Standard patterns
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", "best.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", f"best_seed{seed}.pt"),
@@ -589,15 +591,27 @@ def evaluate_accuracy_and_representations(
         coarse_labels = get_coarse_labels(fine_labels, dataset).to(device)
         
         # Single forward pass: compute stochastic output for accuracy
-        out = model(x, fine_labels, coarse_labels)
+        if hasattr(model, 'level0'):
+            out = model(x, fine_labels, coarse_labels)
+            fine_logits = out.fine_logits
+            coarse_logits = out.coarse_logits
+        else:
+            fine_logits = model(x)
+            coarse_logits = model(x)
         
-        fine_correct += (out.fine_logits.argmax(1) == fine_labels).sum().item()
-        coarse_correct += (out.coarse_logits.argmax(1) == coarse_labels).sum().item()
+        fine_correct += (fine_logits.argmax(1) == fine_labels).sum().item()
+        coarse_correct += (coarse_logits.argmax(1) == coarse_labels).sum().item()
         total += x.size(0)
         
         # Also extract representations for analysis (deterministic paths)
         if samples_count < max_samples:
-            z0, z1, z2 = model.encode_deterministic(x)
+            if hasattr(model, 'encode_deterministic'):
+                z0, z1, z2 = model.encode_deterministic(x)
+            else:
+                # For baselines, use the final feature vector for all three levels
+                feat = model.features(x)  # MobileNetV2 feature extractor
+                feat_flat = feat.mean([2, 3])  # global avg pool
+                z0 = z1 = z2 = feat_flat
             
             remaining = max_samples - samples_count
             z0_list.append(z0[:remaining].cpu().numpy())
@@ -659,7 +673,13 @@ def extract_representations(
         fine_labels = fine_labels.to(device)
         coarse_labels = get_coarse_labels(fine_labels, dataset).to(device)
         
-        z0, z1, z2 = model.encode_deterministic(x)
+        if hasattr(model, 'encode_deterministic'):
+            z0, z1, z2 = model.encode_deterministic(x)
+        else:
+            # For baselines, use the final feature vector for all three levels
+            feat = model.features(x)  # MobileNetV2 feature extractor
+            feat_flat = feat.mean([2, 3])  # global avg pool
+            z0 = z1 = z2 = feat_flat
         
         z0_list.append(z0.cpu().numpy())
         z1_list.append(z1.cpu().numpy())
@@ -709,11 +729,18 @@ def evaluate_accuracy(
         fine_labels = fine_labels.to(device)
         coarse_labels = get_coarse_labels(fine_labels, dataset).to(device)
         
-        # Use stochastic forward for accuracy (matches training conditions)
-        out = model(x, fine_labels, coarse_labels)
+        if hasattr(model, 'level0'):
+            # Use stochastic forward for accuracy (matches training conditions)
+            out = model(x, fine_labels, coarse_labels)
+            fine_logits = out.fine_logits
+            coarse_logits = out.coarse_logits
+            
+        else:
+            fine_logits = model(x)
+            coarse_logits = model(x)
         
-        fine_correct += (out.fine_logits.argmax(1) == fine_labels).sum().item()
-        coarse_correct += (out.coarse_logits.argmax(1) == coarse_labels).sum().item()
+        fine_correct += (fine_logits.argmax(1) == fine_labels).sum().item()
+        coarse_correct += (coarse_logits.argmax(1) == coarse_labels).sum().item()
         total += x.size(0)
     
     fine_acc = 100.0 * fine_correct / total
@@ -1224,7 +1251,10 @@ def evaluate_single_seed(
         "cka_matrix": cka_matrix,
         "representation_stats": stats,
         "model_info": model_info,
-        "param_count": model.param_count(),
+        "param_count": model.param_count() if hasattr(model, 'param_count') else {
+            "total": sum(p.numel() for p in model.parameters()),
+            "total_M": f"{sum(p.numel() for p in model.parameters()) / 1e6:.2f}",
+        },
     }
 
 
@@ -1485,7 +1515,6 @@ def print_results_table(results: List[Dict]):
 # =============================================================================
 
 def save_json_results(
-    all_results: Dict[str, Dict],
     seed_results: Dict[str, Dict],
     output_dir: str,
     config: dict,
@@ -1632,7 +1661,6 @@ def save_json_results(
 
 
 def generate_markdown_report(
-    all_results: Dict[str, Dict],
     seed_results: Dict[str, List[Dict]],
     output_dir: str,
     config: dict,
@@ -1813,7 +1841,7 @@ def evaluate(
                 # Extract model name by removing the seed part
                 # Examples: "fin_cifar100_cifar100_cifar100_seed1" -> "fin_cifar100"
                 #           "mobilenet_fine_cifar100_seed1" -> "mobilenet_fine"
-                model_name = re.sub(r'_seed\d+$', '', directory)
+                model_name = re.sub(r'_(cifar100|cifar10)_seed\d+$', '', directory)
                 
                 if model_name not in model_checkpoints:
                     model_checkpoints[model_name] = {}
@@ -1901,7 +1929,7 @@ def evaluate(
     
     # Save JSON results
     json_results = save_json_results(
-        all_seed_results, all_seed_results, output_dir, cfg, 
+        all_seed_results, output_dir, cfg, 
         argparse.Namespace(
             dataset=dataset,
             seeds=seeds,
@@ -1912,7 +1940,7 @@ def evaluate(
     
     # Generate markdown report
     generate_markdown_report(
-        all_seed_results, all_seed_results, output_dir, cfg,
+        all_seed_results, output_dir, cfg,
         argparse.Namespace(
             dataset=dataset,
             seeds=seeds,
