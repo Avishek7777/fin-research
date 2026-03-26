@@ -1084,24 +1084,30 @@ def print_representation_report(
         print("  [NOTE] High inter-level similarity — levels may not be specializing")
     
     print("\n── Bandwidth Usage ─────────────────────────────────────────")
-    if hasattr(model, '_current_betas'):
+    if model is not None and hasattr(model, '_current_betas'):
         for k, v in model._current_betas.items():
             print(f"  {k}: beta_max={v:.3f}")
     
     print("\n── Alpha Gate Values (top-down influence) ──────────────────")
-    if hasattr(model.level0, "alpha"):
-        a0 = model.level0.alpha.item()
-        print(f"  alpha_0 (L1->L0 influence): {a0:.4f}")
-    if hasattr(model.level1, "alpha"):
-        a1 = model.level1.alpha.item()
-        print(f"  alpha_1 (L2->L1 influence): {a1:.4f}")
+    if model is not None:
+        if hasattr(model.level0, "alpha"):
+            a0 = model.level0.alpha.item()
+            print(f"  alpha_0 (L1->L0 influence): {a0:.4f}")
+        if hasattr(model.level1, "alpha"):
+            a1 = model.level1.alpha.item()
+            print(f"  alpha_1 (L2->L1 influence): {a1:.4f}")
+    else:
+        print("  [Model not available for alpha analysis]")
     
     print("\n── Parameter Count ─────────────────────────────────────────")
-    pc = model.param_count()
-    for k, v in pc.items():
-        if k != "total_M":
-            print(f"  {k:<16}: {v:>10,}")
-    print(f"  {'Total (M)':<16}: {pc['total_M']:>10.2f}M")
+    if model is not None:
+        pc = model.param_count()
+        for k, v in pc.items():
+            if k != "total_M":
+                print(f"  {k:<16}: {v:>10,}")
+        print(f"  {'Total (M)':<16}: {pc['total_M']:>10.2f}M")
+    else:
+        print("  [Model not available for parameter count]")
     
     # Activation statistics
     if "activation" in stats:
