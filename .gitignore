@@ -49,7 +49,7 @@ data/
 # Use git-lfs or link from paper if needed
 # -----------------------------------------------------------------------------
 #checkpoints/
-*.pt
+#*.pt
 *.pth
 *.ckpt
 *.safetensors
