@@ -293,9 +293,22 @@ def load_model(
     dataset: str = "cifar100"
 ) -> FIN:
     """Load FIN from checkpoint."""
-    # Create model with correct num_classes based on dataset
-    model_cfg = cfg.copy()
-    model_cfg["model"]["num_classes"] = get_num_classes(dataset)
+    from copy import deepcopy
+    
+    # Create a deep copy of config and update num_classes based on dataset
+    model_cfg = deepcopy(cfg)
+    
+    # Update num_classes in data section
+    if "data" not in model_cfg:
+        model_cfg["data"] = {}
+    
+    num_classes = get_num_classes(dataset)
+    if dataset == "cifar10":
+        model_cfg["data"]["num_fine_classes"] = 10
+        model_cfg["data"]["num_coarse_classes"] = 10
+    else:  # cifar100
+        model_cfg["data"]["num_fine_classes"] = 100
+        model_cfg["data"]["num_coarse_classes"] = 20
     
     model = build_fin(model_cfg).to(device)
     ckpt = torch.load(checkpoint_path, map_location=device)
