@@ -1633,6 +1633,15 @@ def evaluate(
         for seed in seeds:
             # Try to find checkpoint for this seed
             patterns = [
+                # Actual FIN structure from train.py
+                os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_cifar100_cifar100_seed{seed}", f"best_seed{seed}.pt"),
+                os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_cifar10_cifar10_seed{seed}", f"best_seed{seed}.pt"),
+                # Baseline structures
+                os.path.join(checkpoint_dir, f"mobilenet_fine_cifar100_seed{seed}", f"best_seed{seed}.pt"),
+                os.path.join(checkpoint_dir, f"mobilenet_aux_cifar100_seed{seed}", f"best_seed{seed}.pt"),
+                os.path.join(checkpoint_dir, f"mobilenet_fine_cifar10_seed{seed}", f"best_seed{seed}.pt"),
+                os.path.join(checkpoint_dir, f"mobilenet_aux_cifar10_seed{seed}", f"best_seed{seed}.pt"),
+                # Fallback patterns
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", f"best_seed{seed}.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_seed{seed}", f"best_seed{seed}.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_seed{seed}", f"best_seed{seed}.pt"),
@@ -1643,6 +1652,7 @@ def evaluate(
             for p in patterns:
                 if os.path.exists(p):
                     seed_path = p
+                    print(f"[Found] Checkpoint for seed {seed}: {p}")
                     break
             
             if seed_path:
@@ -1674,6 +1684,10 @@ def evaluate(
                         None,  # model not available after eval
                         dataset=ds,
                     )
+            else:
+                print(f"[Warning] No checkpoint found for seed {seed}. Tried patterns:")
+                for p in patterns:
+                    print(f"  - {p}")
     
     # If single checkpoint provided
     elif checkpoint_path and os.path.exists(checkpoint_path):
