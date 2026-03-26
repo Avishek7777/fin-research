@@ -114,17 +114,45 @@ def build_dataloaders(
         T.Normalize(mean=mean, std=std),
     ])
 
+    # Check if dataset already exists before setting download=True
+    # This avoids unnecessary validation of 50k+ files on every run
+    def dataset_exists(root, dataset_name, train=True):
+        """Check if dataset files already exist locally."""
+        if dataset_name == "CIFAR10":
+            data_dir = os.path.join(root, "cifar-10-batches-py")
+        else:  # CIFAR100
+            data_dir = os.path.join(root, "cifar-100-python")
+        
+        if train:
+            # Check for training files
+            if dataset_name == "CIFAR10":
+                train_files = [os.path.join(data_dir, f"data_batch_{i}") for i in range(1, 6)]
+                train_files.append(os.path.join(data_dir, "meta"))
+                return all(os.path.exists(f) for f in train_files)
+            else:
+                return os.path.exists(os.path.join(data_dir, "train"))
+        else:
+            # Check for test files
+            if dataset_name == "CIFAR10":
+                return os.path.exists(os.path.join(data_dir, "test_batch"))
+            else:
+                return os.path.exists(os.path.join(data_dir, "test"))
+
+    root = data_cfg.get("root", "./data")
+    train_exists = dataset_exists(root, dataset_name, train=True)
+    val_exists = dataset_exists(root, dataset_name, train=False)
+
     train_dataset = DatasetClass(
-        root     = data_cfg.get("root", "./data"),
+        root     = root,
         train    = True,
-        download = True,
+        download = not train_exists,  # Only download if missing
         transform = train_transform,
     )
 
     val_dataset = DatasetClass(
-        root     = data_cfg.get("root", "./data"),
+        root     = root,
         train    = False,
-        download = True,
+        download = not val_exists,  # Only download if missing
         transform = val_transform,
     )
 

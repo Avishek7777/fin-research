@@ -161,15 +161,28 @@ def load_dataset(
         T.Normalize(mean=mean, std=std),
     ])
     
+    # Check if dataset already exists before setting download=True
+    # This avoids unnecessary validation of 50k+ files on every run
+    def dataset_exists(root, dataset_name):
+        """Check if test dataset files already exist locally."""
+        if dataset_name == "cifar10":
+            test_file = os.path.join(root, "cifar-10-batches-py", "test_batch")
+        else:  # cifar100
+            test_file = os.path.join(root, "cifar-100-python", "test")
+        
+        return os.path.exists(test_file)
+    
+    test_exists = dataset_exists(data_root, dataset)
+    
     if dataset == "cifar10":
         val_dataset = torchvision.datasets.CIFAR10(
             root=data_root, train=False,
-            download=True, transform=val_transform,
+            download=not test_exists, transform=val_transform,  # Only download if missing
         )
     elif dataset == "cifar100":
         val_dataset = torchvision.datasets.CIFAR100(
             root=data_root, train=False,
-            download=True, transform=val_transform,
+            download=not test_exists, transform=val_transform,  # Only download if missing
         )
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
@@ -1083,17 +1096,28 @@ def evaluate_single_seed(
     dataset: str,
     device: torch.device,
     max_samples: int = 5000,
+    val_loader: DataLoader = None,
 ) -> Dict[str, Any]:
     """
     Evaluate a single checkpoint on a single dataset.
+    
+    Args:
+        cfg: Configuration dict
+        checkpoint_path: Path to model checkpoint
+        dataset: Dataset name ("cifar10" or "cifar100")
+        device: Compute device
+        max_samples: Max representations to extract
+        val_loader: Optional pre-loaded DataLoader (cached from evaluate())
+                   If not provided, will load dataset
     """
-    # Load dataset once
-    val_loader = load_dataset(
-        dataset=dataset,
-        data_root=cfg["data"]["root"],
-        batch_size=cfg["data"]["batch_size"],
-        num_workers=cfg["data"]["num_workers"],
-    )
+    # Load dataset once (or use cached version)
+    if val_loader is None:
+        val_loader = load_dataset(
+            dataset=dataset,
+            data_root=cfg["data"]["root"],
+            batch_size=cfg["data"]["batch_size"],
+            num_workers=cfg["data"]["num_workers"],
+        )
     
     # Load model
     model = load_model(cfg, checkpoint_path, device, dataset)
@@ -1578,6 +1602,22 @@ def evaluate(
     
     all_seed_results = {}  # model_name -> {dataset -> [results]}
     
+    # Cache dataloaders to avoid reloading same dataset across seeds
+    dataloader_cache = {}
+    
+    def get_cached_dataloader(ds):
+        """Get or create cached dataloader for dataset."""
+        if ds not in dataloader_cache:
+            print(f"[Cache] Loading {ds.upper()} dataset...")
+            dataloader_cache[ds] = load_dataset(
+                dataset=ds,
+                data_root=cfg["data"]["root"],
+                batch_size=cfg["data"]["batch_size"],
+                num_workers=cfg["data"]["num_workers"],
+            )
+        return dataloader_cache[ds]
+
+    
     # If checkpoint_dir provided, look for seed-specific checkpoints
     if checkpoint_dir:
         for seed in seeds:
@@ -1605,8 +1645,11 @@ def evaluate(
                     print(f"Checkpoint: {seed_path}")
                     print("=" * 60)
                     
+                    # Use cached dataloader
+                    val_loader = get_cached_dataloader(ds)
+                    
                     result = evaluate_single_seed(
-                        cfg, seed_path, ds, device, max_samples
+                        cfg, seed_path, ds, device, max_samples, val_loader=val_loader
                     )
                     
                     if model_name not in all_seed_results:
@@ -1633,8 +1676,11 @@ def evaluate(
             print(f"Checkpoint: {checkpoint_path}")
             print("=" * 60)
             
+            # Use cached dataloader
+            val_loader = get_cached_dataloader(ds)
+            
             result = evaluate_single_seed(
-                cfg, checkpoint_path, ds, device, max_samples
+                cfg, checkpoint_path, ds, device, max_samples, val_loader=val_loader
             )
             
             all_seed_results[model_name][ds] = [result]

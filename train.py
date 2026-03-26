@@ -191,31 +191,58 @@ def build_dataloaders(data_cfg: dict, dataset_name: str = "cifar100") -> tuple:
 
     # Build datasets based on dataset_name
     root = data_cfg["root"]
+    
+    # Check if dataset already exists before setting download=True
+    # This avoids unnecessary validation of 50k+ files on every run
+    def dataset_exists(root, dataset_name, train=True):
+        """Check if dataset files already exist locally."""
+        if dataset_name == "cifar10":
+            data_dir = os.path.join(root, "cifar-10-batches-py")
+        else:  # cifar100
+            data_dir = os.path.join(root, "cifar-100-python")
+        
+        if train:
+            # Check for training files
+            train_files = [os.path.join(data_dir, f"data_batch_{i}") for i in range(1, 6)]
+            train_files.append(os.path.join(data_dir, "meta"))
+            return all(os.path.exists(f) for f in train_files) if dataset_name == "cifar10" else os.path.exists(os.path.join(data_dir, "train"))
+        else:
+            # Check for test files
+            if dataset_name == "cifar10":
+                return os.path.exists(os.path.join(data_dir, "test_batch"))
+            else:
+                return os.path.exists(os.path.join(data_dir, "test"))
 
     if dataset_name == "cifar10":
+        train_exists = dataset_exists(root, "cifar10", train=True)
+        val_exists = dataset_exists(root, "cifar10", train=False)
+        
         train_dataset = torchvision.datasets.CIFAR10(
             root      = root,
             train     = True,
-            download  = True,
+            download  = not train_exists,  # Only download if missing
             transform = train_transform,
         )
         val_dataset = torchvision.datasets.CIFAR10(
             root      = root,
             train     = False,
-            download  = True,
+            download  = not val_exists,  # Only download if missing
             transform = val_transform,
         )
     else:  # cifar100
+        train_exists = dataset_exists(root, "cifar100", train=True)
+        val_exists = dataset_exists(root, "cifar100", train=False)
+        
         train_dataset = torchvision.datasets.CIFAR100(
             root      = root,
             train     = True,
-            download  = True,
+            download  = not train_exists,  # Only download if missing
             transform = train_transform,
         )
         val_dataset = torchvision.datasets.CIFAR100(
             root      = root,
             train     = False,
-            download  = True,
+            download  = not val_exists,  # Only download if missing
             transform = val_transform,
         )
 
@@ -239,22 +266,39 @@ def build_dataloaders(data_cfg: dict, dataset_name: str = "cifar100") -> tuple:
     return train_loader, val_loader
 
 
+# Global cache for coarse label tensors on device
+_COARSE_LABEL_TENSOR_CACHE = {}
+
+
 def get_coarse_labels(fine_labels: torch.Tensor, dataset_name: str = "cifar100") -> torch.Tensor:
     """
     Derive coarse labels from fine labels.
+    
+    Optimized to avoid repeated CPU transfers and device mismatches.
+    Caches COARSE_LABEL_TENSOR on the same device as fine_labels.
 
     Args:
-        fine_labels  : (B,) fine class indices
+        fine_labels  : (B,) fine class indices (on any device)
         dataset_name  : "cifar10" or "cifar100"
 
     Returns:
-        coarse_labels: (B,) superclass indices
+        coarse_labels: (B,) superclass indices (on same device as fine_labels)
     """
     if dataset_name == "cifar10":
         # CIFAR-10: no hierarchy, coarse = fine
         return fine_labels
     else:  # cifar100
-        return COARSE_LABEL_TENSOR[fine_labels.cpu()]
+        # Get device from fine_labels
+        device = fine_labels.device
+        
+        # Check if we have cached tensor on this device
+        if device not in _COARSE_LABEL_TENSOR_CACHE:
+            # Create and cache on device
+            _COARSE_LABEL_TENSOR_CACHE[device] = COARSE_LABEL_TENSOR.to(device)
+        
+        # Index on device (no CPU transfer!)
+        coarse_tensor = _COARSE_LABEL_TENSOR_CACHE[device]
+        return coarse_tensor[fine_labels]
 
 
 # =============================================================================
