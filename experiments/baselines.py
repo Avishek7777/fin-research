@@ -52,7 +52,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
@@ -457,7 +457,7 @@ def train_baseline(
                 coarse_labels = get_coarse_labels(fine_labels, dataset_name).to(device)
 
             optimizer.zero_grad(set_to_none=True)
-            with autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
+            with autocast('cuda' if device.type == 'cuda' else 'cpu'):
                 out = model(x, fine_labels, coarse_labels)
 
             scaler.scale(out["loss"]).backward()
