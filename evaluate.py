@@ -1609,9 +1609,21 @@ def generate_markdown_report(
     md_lines.append("| Model | Fine Acc | Coarse Acc | Joint Acc | Params (M) | FLOPs (M) |")
     md_lines.append("|-------|----------|------------|-----------|------------|-----------|")
     
-    for model_name, results in seed_results.items():
+    for model_name, results_or_dict in seed_results.items():
+        if not results_or_dict:
+            continue
+        
+        # Handle nested structure: {dataset -> [results]}
+        if isinstance(results_or_dict, dict):
+            # Get first dataset's results for this model
+            results = list(results_or_dict.values())[0]
+        else:
+            # Already a flat list
+            results = results_or_dict
+        
         if not results:
             continue
+            
         stats = compute_multi_seed_statistics(results)
         fine_acc = f"{stats['fine_acc']['mean']:.2f} ± {stats['fine_acc']['std']:.2f}"
         coarse_acc = f"{stats['coarse_acc']['mean']:.2f} ± {stats['coarse_acc']['std']:.2f}"
@@ -1727,11 +1739,11 @@ def evaluate(
                 # Actual FIN structure from train.py
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_cifar100_cifar100_seed{seed}", f"best_seed{seed}.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_cifar10_cifar10_seed{seed}", f"best_seed{seed}.pt"),
-                # Baseline structures
-                os.path.join(checkpoint_dir, f"mobilenet_fine_cifar100_seed{seed}", f"best_seed{seed}.pt"),
-                os.path.join(checkpoint_dir, f"mobilenet_aux_cifar100_seed{seed}", f"best_seed{seed}.pt"),
-                os.path.join(checkpoint_dir, f"mobilenet_fine_cifar10_seed{seed}", f"best_seed{seed}.pt"),
-                os.path.join(checkpoint_dir, f"mobilenet_aux_cifar10_seed{seed}", f"best_seed{seed}.pt"),
+                # Baseline structures (baselines.py saves as best.pt)
+                os.path.join(checkpoint_dir, f"mobilenet_fine_cifar100_seed{seed}", "best.pt"),
+                os.path.join(checkpoint_dir, f"mobilenet_aux_cifar100_seed{seed}", "best.pt"),
+                os.path.join(checkpoint_dir, f"mobilenet_fine_cifar10_seed{seed}", "best.pt"),
+                os.path.join(checkpoint_dir, f"mobilenet_aux_cifar10_seed{seed}", "best.pt"),
                 # Fallback patterns
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", f"best_seed{seed}.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_seed{seed}", f"best_seed{seed}.pt"),
