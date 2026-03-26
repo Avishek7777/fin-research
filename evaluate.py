@@ -251,6 +251,15 @@ def count_flops(model: nn.Module, input_size: Tuple[int, int, int] = (1, 3, 32, 
         if hasattr(module, 'bias') and module.bias is not None:
             total_params += module.bias.numel()
         
+        # Guard against shapes without spatial dimensions
+        if len(input_shape) < 3:
+            # Shape is 1D or 2D (e.g., after Linear layer)
+            # Recurse into children but don't try to count Conv/BN
+            child_output_shape = input_shape
+            for child in module.children():
+                child_output_shape = recursively_count_flops(child, child_output_shape)
+            return child_output_shape
+        
         h, w = input_shape[1], input_shape[2]
         
         if isinstance(module, nn.Conv2d):
