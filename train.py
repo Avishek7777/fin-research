@@ -55,6 +55,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
@@ -411,6 +412,7 @@ def train_one_epoch(
     model       : FIN,
     loader      : DataLoader,
     optimizer   : optim.Optimizer,
+    scaler      : GradScaler,
     writer      : SummaryWriter,
     epoch       : int,
     cfg         : dict,
@@ -419,7 +421,7 @@ def train_one_epoch(
     dataset_name: str = "cifar100",
 ) -> tuple:
     """
-    Train for one epoch.
+    Train for one epoch with mixed precision training.
 
     Returns:
         tracker (MetricsTracker): accumulated metrics for this epoch
@@ -437,16 +439,19 @@ def train_one_epoch(
         coarse_labels= get_coarse_labels(fine_labels, dataset_name).to(device)
 
         # ── Forward ──────────────────────────────────────────────────────
-        out = model(x, fine_labels, coarse_labels)
+        optimizer.zero_grad(set_to_none=True)
+        with autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
+            out = model(x, fine_labels, coarse_labels)
 
         # ── Backward ─────────────────────────────────────────────────────
-        optimizer.zero_grad(set_to_none=True)
-        out.total_loss.backward()
+        scaler.scale(out.total_loss).backward()
 
         # Gradient clipping — important for stability with hierarchical losses
+        scaler.unscale_(optimizer)
         nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         # ── Logging ──────────────────────────────────────────────────────
         tracker.update(out.breakdown)
@@ -585,6 +590,10 @@ def train_single(
     optimizer = build_optimizer(model, cfg["training"])
     scheduler = build_lr_scheduler(optimizer, cfg["training"])
 
+    # ── Mixed Precision Training ─────────────────────────────────────────────
+    scaler = GradScaler(enabled=(device.type == 'cuda'))
+    print(f"[Setup] GradScaler enabled: {scaler.is_enabled()}")
+
     # ── Resume ───────────────────────────────────────────────────────────────
     start_epoch = 0
     if resume_path:
@@ -617,7 +626,7 @@ def train_single(
 
         # 2. Train one epoch
         train_tracker, global_step = train_one_epoch(
-            model, train_loader, optimizer, writer,
+            model, train_loader, optimizer, scaler, writer,
             epoch, cfg, global_step, device, dataset_name
         )
 

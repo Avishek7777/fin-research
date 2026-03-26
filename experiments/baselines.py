@@ -52,6 +52,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
@@ -416,6 +417,10 @@ def train_baseline(
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+    # ── Mixed Precision Training ─────────────────────────────────────────────
+    scaler = GradScaler(enabled=(device.type == 'cuda'))
+    print(f"[{model_name}] GradScaler enabled: {scaler.is_enabled()}")
+
     # Logging
     ckpt_dir = os.path.join(
         "checkpoints", 
@@ -451,12 +456,15 @@ def train_baseline(
             else:
                 coarse_labels = get_coarse_labels(fine_labels, dataset_name).to(device)
 
-            out = model(x, fine_labels, coarse_labels)
-
             optimizer.zero_grad(set_to_none=True)
-            out["loss"].backward()
+            with autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
+                out = model(x, fine_labels, coarse_labels)
+
+            scaler.scale(out["loss"]).backward()
+            scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             for k in train_metrics:
                 val = out[k].item() if torch.is_tensor(out[k]) else out[k]
