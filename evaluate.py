@@ -349,9 +349,15 @@ def find_checkpoint_paths(
         for seed in seeds:
             # Try various patterns
             patterns = [
+                # Actual train.py output (dataset repeated)
+                os.path.join(checkpoint_dir, f"{model_prefix}_{model_prefix}_{model_prefix}_seed{seed}", f"best_seed{seed}.pt"),
+                # Standard patterns
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", "best.pt"),
+                os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", f"best_seed{seed}.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_seed{seed}", "best.pt"),
+                os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_seed{seed}", f"best_seed{seed}.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_seed{seed}", "best.pt"),
+                os.path.join(checkpoint_dir, f"{model_prefix}_seed{seed}", f"best_seed{seed}.pt"),
                 os.path.join(checkpoint_dir, f"seed{seed}", "best.pt"),
                 os.path.join(checkpoint_dir, f"best_seed{seed}.pt"),
             ]
@@ -367,17 +373,21 @@ def find_checkpoint_paths(
             match = re.search(r'seed(\d+)', d)
             if match:
                 seed = int(match.group(1))
+                # Try both best.pt and best_seed{n}.pt
                 ckpt_path = os.path.join(checkpoint_dir, d, "best.pt")
+                if not os.path.exists(ckpt_path):
+                    ckpt_path = os.path.join(checkpoint_dir, d, f"best_seed{seed}.pt")
                 if os.path.exists(ckpt_path):
                     paths[seed] = ckpt_path
         
-        # Also check for best_seed{n}.pt pattern
+        # Also check for best_seed{n}.pt pattern in root
         files = glob.glob(os.path.join(checkpoint_dir, "best_seed*.pt"))
         for f in files:
             match = re.search(r'seed(\d+)', f)
             if match:
                 seed = int(match.group(1))
-                paths[seed] = f
+                if seed not in paths:  # Prefer directory version
+                    paths[seed] = f
         
         # If no seed directories found, look for best.pt
         if not paths:

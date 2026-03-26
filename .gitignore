@@ -48,7 +48,7 @@ data/
 # Checkpoints & model weights — too large for git
 # Use git-lfs or link from paper if needed
 # -----------------------------------------------------------------------------
-checkpoints/
+#checkpoints/
 *.pt
 *.pth
 *.ckpt

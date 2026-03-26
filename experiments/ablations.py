@@ -755,14 +755,16 @@ Examples:
             exp_name = cfg["experiment"]["name"]
             base_ckpt_dir = cfg["experiment"]["checkpoint_dir"]
             
-            # train.py creates checkpoints at: {base_ckpt_dir}/{exp_name}_{dataset}_seed{N}/best_seed{N}.pt
+            # train.py creates checkpoints at: {base_ckpt_dir}/{exp_name}_{dataset}_{dataset}_seed{N}/best_seed{N}.pt
             # Try multiple patterns to support different naming conventions
             ckpt_patterns = [
-                # Pattern 1: Standard train.py output (--dataset cifar100 or --dataset cifar10)
+                # Pattern 1: Actual train.py output (dataset repeated in path)
+                os.path.join(base_ckpt_dir, f"{exp_name}_{dataset}_{dataset}_seed{seed}", f"best_seed{seed}.pt"),
+                # Pattern 2: Standard train.py output (--dataset cifar100 or --dataset cifar10)
                 os.path.join(base_ckpt_dir, f"{exp_name}_{dataset}_seed{seed}", f"best_seed{seed}.pt"),
-                # Pattern 2: train.py with --dataset both (nested structure)
+                # Pattern 3: train.py with --dataset both (nested structure)
                 os.path.join(base_ckpt_dir, f"{exp_name}_both", f"{exp_name}_both_{dataset}_seed{seed}", f"best_seed{seed}.pt"),
-                # Pattern 3: Flat structure fallback
+                # Pattern 4: Flat structure fallback
                 os.path.join(base_ckpt_dir, f"best_seed{seed}.pt"),
             ]
             
@@ -791,8 +793,8 @@ Examples:
                 print(f"        Expected patterns:")
                 for i, pattern in enumerate(ckpt_patterns, 1):
                     print(f"          {i}. {pattern}")
-                print(f"        Skipping ablations for this seed. Please run train.py first:")
-                print(f"          python train.py --config {cfg['_config_path']} --dataset both --seeds '{seed}'")
+                print(f"        Please run train.py first:")
+                print(f"          python train.py --config configs/fin_cifar100.yaml --dataset {dataset} --seeds '{seed}'")
                 raise FileNotFoundError(f"Missing baseline checkpoint for {dataset} seed {seed}")
             baseline_results.append(result)
             all_results.append(result)
