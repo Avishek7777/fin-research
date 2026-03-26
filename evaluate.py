@@ -1443,13 +1443,15 @@ def print_results_table(results: List[Dict]):
 
 def save_json_results(
     all_results: Dict[str, Dict],
-    seed_results: Dict[str, List[Dict]],
+    seed_results: Dict[str, Dict],
     output_dir: str,
     config: dict,
     args: argparse.Namespace,
 ):
     """
     Save comprehensive JSON results file.
+    Handles both flat structure {model_name -> [results]} 
+    and nested structure {model_name -> {dataset -> [results]}}
     """
     json_results = {
         "config": {
@@ -1464,57 +1466,118 @@ def save_json_results(
     }
     
     # Per-model results
-    for model_name, results in seed_results.items():
-        if not results:
+    for model_name, results_or_dict in seed_results.items():
+        if not results_or_dict:
             continue
         
-        dataset = results[0]["dataset"]
-        stats = compute_multi_seed_statistics(results)
-        
-        json_results["per_model"][model_name] = {
-            "dataset": dataset,
-            "n_seeds": len(results),
-            "per_seed": [
-                {
-                    "seed": i + 1,
-                    "checkpoint": r["checkpoint_path"],
-                    "accuracies": r["accuracies"],
-                    "cka_matrix": r["cka_matrix"].tolist(),
-                    "representation_stats": {
-                        k: {kk: float(vv) if isinstance(vv, (np.floating, float)) else vv 
-                            for kk, vv in v.items()}
-                        for k, v in r["representation_stats"].items()
+        # Handle nested structure: {dataset -> [results]}
+        if isinstance(results_or_dict, dict):
+            # results_or_dict is {dataset -> [results]}
+            for dataset_key, results_list in results_or_dict.items():
+                if not results_list:
+                    continue
+                
+                # Create a key that includes dataset for clarity
+                results_key = f"{model_name}_{dataset_key}" if len(results_or_dict) > 1 else model_name
+                
+                if isinstance(results_list, list) and len(results_list) > 0:
+                    dataset = results_list[0].get("dataset", dataset_key)
+                    stats = compute_multi_seed_statistics(results_list)
+                    
+                    json_results["per_model"][results_key] = {
+                        "dataset": dataset,
+                        "n_seeds": len(results_list),
+                        "per_seed": [
+                            {
+                                "seed": i + 1,
+                                "checkpoint": r.get("checkpoint_path", ""),
+                                "accuracies": r.get("accuracies", {}),
+                                "cka_matrix": r.get("cka_matrix", np.eye(3)).tolist() if hasattr(r.get("cka_matrix", []), "tolist") else [],
+                                "representation_stats": {
+                                    k: {kk: float(vv) if isinstance(vv, (np.floating, float)) else vv 
+                                        for kk, vv in v.items()}
+                                    for k, v in r.get("representation_stats", {}).items()
+                                },
+                            }
+                            for i, r in enumerate(results_list)
+                        ],
+                        "summary_statistics": {
+                            "accuracies": {
+                                "fine_acc": stats.get("fine_acc", {}),
+                                "coarse_acc": stats.get("coarse_acc", {}),
+                                "joint_acc": stats.get("joint_acc", {}),
+                            },
+                            "cka": stats.get("cka", {}),
+                            "intrinsic_dim": stats.get("intrinsic_dim", {}),
+                            "model_info": stats.get("model_info", {}),
+                        }
+                    }
+         # Handle flat structure: [results] (backward compatibility)
+        elif isinstance(results_or_dict, list) and len(results_or_dict) > 0:
+            dataset = results_or_dict[0].get("dataset", args.dataset)
+            stats = compute_multi_seed_statistics(results_or_dict)
+            
+            json_results["per_model"][model_name] = {
+                "dataset": dataset,
+                "n_seeds": len(results_or_dict),
+                "per_seed": [
+                    {
+                        "seed": i + 1,
+                        "checkpoint": r.get("checkpoint_path", ""),
+                        "accuracies": r.get("accuracies", {}),
+                        "cka_matrix": r.get("cka_matrix", np.eye(3)).tolist() if hasattr(r.get("cka_matrix", []), "tolist") else [],
+                        "representation_stats": {
+                            k: {kk: float(vv) if isinstance(vv, (np.floating, float)) else vv 
+                                for kk, vv in v.items()}
+                            for k, v in r.get("representation_stats", {}).items()
+                        },
+                    }
+                    for i, r in enumerate(results_or_dict)
+                ],
+                "summary_statistics": {
+                    "accuracies": {
+                        "fine_acc": stats.get("fine_acc", {}),
+                        "coarse_acc": stats.get("coarse_acc", {}),
+                        "joint_acc": stats.get("joint_acc", {}),
                     },
+                    "cka": stats.get("cka", {}),
+                    "intrinsic_dim": stats.get("intrinsic_dim", {}),
+                    "model_info": stats.get("model_info", {}),
                 }
-                for i, r in enumerate(results)
-            ],
-            "summary_statistics": {
-                "accuracies": {
-                    "fine_acc": stats["fine_acc"],
-                    "coarse_acc": stats["coarse_acc"],
-                    "joint_acc": stats["joint_acc"],
-                },
-                "cka": stats["cka"],
-                "intrinsic_dim": stats["intrinsic_dim"],
-                "model_info": stats["model_info"],
             }
-        }
     
-    # Summary across all models
+    # Summary across all models - simplified
     if len(seed_results) > 1:
-        json_results["summary"] = {
-            "best_model_by_accuracy": max(
-                seed_results.keys(),
-                key=lambda k: compute_multi_seed_statistics(seed_results[k])["fine_acc"]["mean"]
-                if seed_results[k] else 0
-            ),
-            "best_model_by_efficiency": max(
-                seed_results.keys(),
-                key=lambda k: compute_multi_seed_statistics(seed_results[k])["fine_acc"]["mean"] /
-                              (compute_multi_seed_statistics(seed_results[k])["model_info"]["params_M"] or 1)
-                if seed_results[k] else 0
-            ),
-        }
+        # Build summary data by extracting first dataset results from each model
+        model_summaries = {}
+        for model_name, results_or_dict in seed_results.items():
+            try:
+                if isinstance(results_or_dict, dict):
+                    # Get first dataset's results
+                    first_results = list(results_or_dict.values())[0]
+                elif isinstance(results_or_dict, list):
+                    first_results = results_or_dict
+                else:
+                    continue
+                    
+                if first_results:
+                    stats = compute_multi_seed_statistics(first_results)
+                    model_summaries[model_name] = stats
+            except:
+                continue
+        
+        if model_summaries:
+            json_results["summary"] = {
+                "best_model_by_accuracy": max(
+                    model_summaries.keys(),
+                    key=lambda k: model_summaries[k].get("fine_acc", {}).get("mean", 0)
+                ),
+                "best_model_by_efficiency": max(
+                    model_summaries.keys(),
+                    key=lambda k: model_summaries[k].get("fine_acc", {}).get("mean", 0) /
+                                  (model_summaries[k].get("model_info", {}).get("params_M", 1) or 1)
+                ),
+            }
     
     # Save JSON
     json_path = os.path.join(output_dir, "evaluation_results.json")
