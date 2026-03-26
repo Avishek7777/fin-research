@@ -755,23 +755,24 @@ Examples:
             exp_name = cfg["experiment"]["name"]
             base_ckpt_dir = cfg["experiment"]["checkpoint_dir"]
             
-            # train.py with --dataset both names checkpoints:
-            # {base_ckpt_dir}/{exp_name}_both/{exp_name}_both_{dataset}_seed{N}/best_seed{N}.pt
-            ckpt_path = os.path.join(
-                base_ckpt_dir,
-                f"{exp_name}_both",
-                f"{exp_name}_both_{dataset}_seed{seed}",
-                f"best_seed{seed}.pt"
-            )
-            # Fallback: flat structure
-            if not os.path.exists(ckpt_path):
-                ckpt_path = os.path.join(
-                    base_ckpt_dir,
-                    f"{exp_name}_{dataset}_seed{seed}",
-                    f"best_seed{seed}.pt"
-                )
-
-            if os.path.exists(ckpt_path):
+            # train.py creates checkpoints at: {base_ckpt_dir}/{exp_name}_{dataset}_seed{N}/best_seed{N}.pt
+            # Try multiple patterns to support different naming conventions
+            ckpt_patterns = [
+                # Pattern 1: Standard train.py output (--dataset cifar100 or --dataset cifar10)
+                os.path.join(base_ckpt_dir, f"{exp_name}_{dataset}_seed{seed}", f"best_seed{seed}.pt"),
+                # Pattern 2: train.py with --dataset both (nested structure)
+                os.path.join(base_ckpt_dir, f"{exp_name}_both", f"{exp_name}_both_{dataset}_seed{seed}", f"best_seed{seed}.pt"),
+                # Pattern 3: Flat structure fallback
+                os.path.join(base_ckpt_dir, f"best_seed{seed}.pt"),
+            ]
+            
+            ckpt_path = None
+            for pattern in ckpt_patterns:
+                if os.path.exists(pattern):
+                    ckpt_path = pattern
+                    break
+            
+            if ckpt_path:
                 import torch
                 ckpt = torch.load(ckpt_path, map_location="cpu")
                 metrics = ckpt.get("metrics", {})
@@ -786,14 +787,13 @@ Examples:
                     "params_M": metrics.get("params_M", 0),
                 }
             else:
-                print(f"[Warning] Baseline checkpoint not found at {ckpt_path}, retraining...")
-                result = run_single_experiment(
-                    cfg=cfg,
-                    ablation="full",
-                    seed=seed,
-                    output_dir=dataset_output,
-                    dataset=dataset,
-                )
+                print(f"[ERROR] Baseline checkpoint not found for {dataset} seed {seed}.")
+                print(f"        Expected patterns:")
+                for i, pattern in enumerate(ckpt_patterns, 1):
+                    print(f"          {i}. {pattern}")
+                print(f"        Skipping ablations for this seed. Please run train.py first:")
+                print(f"          python train.py --config {cfg['_config_path']} --dataset both --seeds '{seed}'")
+                raise FileNotFoundError(f"Missing baseline checkpoint for {dataset} seed {seed}")
             baseline_results.append(result)
             all_results.append(result)
         

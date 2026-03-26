@@ -472,6 +472,81 @@ def extract_representations_with_diagnostics(
 
 
 @torch.no_grad()
+def evaluate_accuracy_and_representations(
+    model      : FIN,
+    loader     : DataLoader,
+    device     : torch.device,
+    max_samples: int = 5000,
+    dataset    : str = "cifar100",
+) -> tuple:
+    """
+    Compute accuracy AND extract representations in a single forward pass.
+    This eliminates the redundant second forward pass.
+    
+    Returns:
+        tuple: (accuracies_dict, representations_dict)
+    """
+    model.eval()
+    fine_correct = 0
+    coarse_correct = 0
+    total = 0
+    
+    z0_list, z1_list, z2_list = [], [], []
+    fine_list, coarse_list = [], []
+    samples_count = 0
+    
+    for x, fine_labels in tqdm(loader, desc="Evaluating accuracy & extracting representations"):
+        x = x.to(device)
+        fine_labels = fine_labels.to(device)
+        coarse_labels = get_coarse_labels(fine_labels, dataset).to(device)
+        
+        # Single forward pass: compute stochastic output for accuracy
+        out = model(x, fine_labels, coarse_labels)
+        
+        fine_correct += (out.fine_logits.argmax(1) == fine_labels).sum().item()
+        coarse_correct += (out.coarse_logits.argmax(1) == coarse_labels).sum().item()
+        total += x.size(0)
+        
+        # Also extract representations for analysis (deterministic paths)
+        if samples_count < max_samples:
+            z0, z1, z2 = model.encode_deterministic(x)
+            
+            remaining = max_samples - samples_count
+            z0_list.append(z0[:remaining].cpu().numpy())
+            z1_list.append(z1[:remaining].cpu().numpy())
+            z2_list.append(z2[:remaining].cpu().numpy())
+            fine_list.append(fine_labels[:remaining].cpu().numpy())
+            coarse_list.append(coarse_labels[:remaining].cpu().numpy())
+            
+            samples_count += min(x.size(0), remaining)
+    
+    fine_acc = 100.0 * fine_correct / total
+    coarse_acc = 100.0 * coarse_correct / total
+    
+    # For CIFAR-10, coarse = fine (no hierarchy)
+    if dataset == "cifar10":
+        coarse_acc = fine_acc
+    
+    joint = fine_acc + coarse_acc
+    
+    accuracies = {
+        "fine_acc"  : fine_acc,
+        "coarse_acc": coarse_acc,
+        "joint_acc" : joint,
+    }
+    
+    representations = {
+        "z0"           : np.concatenate(z0_list, axis=0)[:max_samples],
+        "z1"           : np.concatenate(z1_list, axis=0)[:max_samples],
+        "z2"           : np.concatenate(z2_list, axis=0)[:max_samples],
+        "fine_labels"  : np.concatenate(fine_list, axis=0)[:max_samples],
+        "coarse_labels": np.concatenate(coarse_list, axis=0)[:max_samples],
+    }
+    
+    return accuracies, representations
+
+
+@torch.no_grad()
 def extract_representations(
     model      : FIN,
     loader     : DataLoader,
@@ -1012,7 +1087,7 @@ def evaluate_single_seed(
     """
     Evaluate a single checkpoint on a single dataset.
     """
-    # Load dataset
+    # Load dataset once
     val_loader = load_dataset(
         dataset=dataset,
         data_root=cfg["data"]["root"],
@@ -1026,11 +1101,8 @@ def evaluate_single_seed(
     # Count FLOPs and params
     model_info = count_flops(model, input_size=(1, 3, 32, 32))
     
-    # Evaluate accuracy
-    accuracies = evaluate_accuracy(model, val_loader, device, dataset)
-    
-    # Extract representations
-    representations = extract_representations(
+    # Evaluate accuracy AND extract representations in a single forward pass
+    accuracies, representations = evaluate_accuracy_and_representations(
         model, val_loader, device, max_samples, dataset
     )
     

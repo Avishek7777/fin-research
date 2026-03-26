@@ -509,6 +509,13 @@ def train_baseline(
 
     writer.close()
     print(f"\n[{model_name}] Done. Best joint: {best_joint:.2f}")
+    
+    # Clear GPU memory before returning to avoid fragmentation
+    if torch.cuda.is_available():
+        del model, optimizer, scheduler
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    
     return best_metrics
 
 

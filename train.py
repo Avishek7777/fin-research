@@ -636,6 +636,12 @@ def train_single(
     print(f"[Done] Best joint accuracy: {best_joint:.2f}")
     print(f"[Done] Best checkpoint: {os.path.join(ckpt_dir, f'best_seed{seed}.pt')}")
     print(f"[Done] TensorBoard logs: {log_dir}")
+    
+    # Clear GPU memory before returning to avoid fragmentation
+    if torch.cuda.is_available():
+        del model, optimizer, scheduler
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
     # Return results for this run
     return {
