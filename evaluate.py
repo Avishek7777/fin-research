@@ -300,36 +300,79 @@ def load_model(
     checkpoint_path: str, 
     device: torch.device,
     dataset: str = "cifar100"
-) -> FIN:
-    """Load FIN from checkpoint."""
+):
+    """Load model from checkpoint - supports FIN and baseline models."""
     from copy import deepcopy
     
-    # Create a deep copy of config and update num_classes based on dataset
-    model_cfg = deepcopy(cfg)
+    # Determine model type from checkpoint path
+    checkpoint_name = os.path.basename(os.path.dirname(checkpoint_path))
+    is_mobilenet_fine = "mobilenet_fine" in checkpoint_name
+    is_mobilenet_aux = "mobilenet_aux" in checkpoint_name
+    is_fin = not (is_mobilenet_fine or is_mobilenet_aux)
     
-    # Update num_classes in data section
-    if "data" not in model_cfg:
-        model_cfg["data"] = {}
-    
-    num_classes = get_num_classes(dataset)
-    if dataset == "cifar10":
-        model_cfg["data"]["num_fine_classes"] = 10
-        model_cfg["data"]["num_coarse_classes"] = 10
-    else:  # cifar100
-        model_cfg["data"]["num_fine_classes"] = 100
-        model_cfg["data"]["num_coarse_classes"] = 20
-    
-    model = build_fin(model_cfg).to(device)
+    # Load checkpoint first to inspect structure
     ckpt = torch.load(checkpoint_path, map_location=device)
     
-    # Try loading state dict, handle different checkpoint formats
+    # Extract state dict
     if "model_state" in ckpt:
-        model.load_state_dict(ckpt["model_state"])
+        state_dict = ckpt["model_state"]
     elif "state_dict" in ckpt:
-        model.load_state_dict(ckpt["state_dict"])
+        state_dict = ckpt["state_dict"]
     else:
-        model.load_state_dict(ckpt)
+        state_dict = ckpt
     
+    # Determine model type from state dict if path detection isn't clear
+    has_fin_keys = any(k.startswith("level") for k in state_dict.keys())
+    has_features_keys = any(k.startswith("features") for k in state_dict.keys())
+    
+    if has_features_keys:
+        is_mobilenet_fine = "coarse_head" not in state_dict
+        is_mobilenet_aux = "coarse_head" in state_dict
+        is_fin = False
+    elif has_fin_keys:
+        is_fin = True
+        is_mobilenet_fine = False
+        is_mobilenet_aux = False
+    
+    # Load appropriate model type
+    if is_mobilenet_fine:
+        # Import baseline models
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "experiments"))
+        from baselines import MobileNetV2Fine
+        
+        num_classes = get_num_classes(dataset)
+        model = MobileNetV2Fine(num_classes=num_classes).to(device)
+        print(f"[Load] Loaded MobileNetV2Fine")
+        
+    elif is_mobilenet_aux:
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "experiments"))
+        from baselines import MobileNetV2Aux
+        
+        num_classes = get_num_classes(dataset)
+        model = MobileNetV2Aux(num_classes=num_classes).to(device)
+        print(f"[Load] Loaded MobileNetV2Aux")
+        
+    else:  # FIN model
+        model_cfg = deepcopy(cfg)
+        
+        # Update num_classes in data section
+        if "data" not in model_cfg:
+            model_cfg["data"] = {}
+        
+        if dataset == "cifar10":
+            model_cfg["data"]["num_fine_classes"] = 10
+            model_cfg["data"]["num_coarse_classes"] = 10
+        else:  # cifar100
+            model_cfg["data"]["num_fine_classes"] = 100
+            model_cfg["data"]["num_coarse_classes"] = 20
+        
+        model = build_fin(model_cfg).to(device)
+        print(f"[Load] Loaded FIN")
+    
+    # Load state dict
+    model.load_state_dict(state_dict)
     model.eval()
     print(f"[Load] Loaded checkpoint: {checkpoint_path}")
     if "metrics" in ckpt:
