@@ -414,11 +414,11 @@ def find_checkpoint_paths(
         for seed in seeds:
             # Try various patterns
             patterns = [
-                # Actual train.py output (dataset repeated)
-                # Correct patterns for FIN
+                # Actual train.py output: experiment name has dataset appended once in main(),
+                # so FIN on cifar100 produces "fin_cifar100_cifar100_seed{n}"
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_cifar100_seed{seed}", f"best_seed{seed}.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_cifar10_seed{seed}", f"best_seed{seed}.pt"),
-                # Standard patterns
+                # Standard patterns (baselines and fallbacks)
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", "best.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar100_seed{seed}", f"best_seed{seed}.pt"),
                 os.path.join(checkpoint_dir, f"{model_prefix}_cifar10_seed{seed}", "best.pt"),
@@ -526,7 +526,11 @@ def extract_representations_with_diagnostics(
                     activation_stats[f'{level}_std'].append(acts.std().item())
                     activation_stats[f'{level}_sparsity'].append((acts.abs() < 0.01).float().mean().item())
         else:
-            z0, z1, z2 = model.encode_deterministic(x)
+            if hasattr(model, 'encode_deterministic'):
+                z0, z1, z2 = model.encode_deterministic(x)
+            else:
+                feat = model.features(x).mean([2, 3])
+                z0 = z1 = z2 = feat
         
         z0_list.append(z0.cpu().numpy())
         z1_list.append(z1.cpu().numpy())
@@ -590,16 +594,19 @@ def evaluate_accuracy_and_representations(
         fine_labels = fine_labels.to(device)
         coarse_labels = get_coarse_labels(fine_labels, dataset).to(device)
         
-        # Single forward pass: compute stochastic output for accuracy
-        if hasattr(model, 'level0'):
+        # FIN and baseline models have different forward signatures
+        if hasattr(model, 'level0'):  # FIN model
             out = model(x, fine_labels, coarse_labels)
-            fine_logits = out.fine_logits
+            fine_logits   = out.fine_logits
             coarse_logits = out.coarse_logits
-        else:
+        else:  # Baseline MobileNet
             fine_logits = model(x)
-            coarse_logits = model(x)
+            if hasattr(model, 'coarse_head'):
+                coarse_logits = model.coarse_head(model.features(x).mean([2, 3]))
+            else:
+                coarse_logits = fine_logits
         
-        fine_correct += (fine_logits.argmax(1) == fine_labels).sum().item()
+        fine_correct   += (fine_logits.argmax(1)   == fine_labels).sum().item()
         coarse_correct += (coarse_logits.argmax(1) == coarse_labels).sum().item()
         total += x.size(0)
         
@@ -608,10 +615,9 @@ def evaluate_accuracy_and_representations(
             if hasattr(model, 'encode_deterministic'):
                 z0, z1, z2 = model.encode_deterministic(x)
             else:
-                # For baselines, use the final feature vector for all three levels
-                feat = model.features(x)  # MobileNetV2 feature extractor
-                feat_flat = feat.mean([2, 3])  # global avg pool
-                z0 = z1 = z2 = feat_flat
+                # For baselines, use the feature extractor output for all three levels
+                feat = model.features(x).mean([2, 3])  # global avg pool → (B, C)
+                z0 = z1 = z2 = feat
             
             remaining = max_samples - samples_count
             z0_list.append(z0[:remaining].cpu().numpy())
@@ -676,10 +682,9 @@ def extract_representations(
         if hasattr(model, 'encode_deterministic'):
             z0, z1, z2 = model.encode_deterministic(x)
         else:
-            # For baselines, use the final feature vector for all three levels
-            feat = model.features(x)  # MobileNetV2 feature extractor
-            feat_flat = feat.mean([2, 3])  # global avg pool
-            z0 = z1 = z2 = feat_flat
+            # For baselines, use the feature extractor output for all three levels
+            feat = model.features(x).mean([2, 3])  # global avg pool → (B, C)
+            z0 = z1 = z2 = feat
         
         z0_list.append(z0.cpu().numpy())
         z1_list.append(z1.cpu().numpy())
@@ -729,17 +734,20 @@ def evaluate_accuracy(
         fine_labels = fine_labels.to(device)
         coarse_labels = get_coarse_labels(fine_labels, dataset).to(device)
         
-        if hasattr(model, 'level0'):
-            # Use stochastic forward for accuracy (matches training conditions)
+        # FIN and baseline models have different forward signatures
+        if hasattr(model, 'level0'):  # FIN model
             out = model(x, fine_labels, coarse_labels)
-            fine_logits = out.fine_logits
+            fine_logits   = out.fine_logits
             coarse_logits = out.coarse_logits
-            
-        else:
+        else:  # Baseline MobileNet
             fine_logits = model(x)
-            coarse_logits = model(x)
+            # MobileNetV2Aux has a separate coarse head; MobileNetV2Fine doesn't
+            if hasattr(model, 'coarse_head'):
+                coarse_logits = model.coarse_head(model.features(x).mean([2, 3]))
+            else:
+                coarse_logits = fine_logits
         
-        fine_correct += (fine_logits.argmax(1) == fine_labels).sum().item()
+        fine_correct   += (fine_logits.argmax(1)   == fine_labels).sum().item()
         coarse_correct += (coarse_logits.argmax(1) == coarse_labels).sum().item()
         total += x.size(0)
     
@@ -1838,9 +1846,10 @@ def evaluate(
             seed_match = re.search(r'seed(\d+)', directory)
             if seed_match:
                 seed = int(seed_match.group(1))
-                # Extract model name by removing the seed part
-                # Examples: "fin_cifar100_cifar100_cifar100_seed1" -> "fin_cifar100"
-                #           "mobilenet_fine_cifar100_seed1" -> "mobilenet_fine"
+                # Extract model name by removing the trailing dataset + seed suffix.
+                # train.py appends the dataset name once in main(), so FIN on cifar100
+                # produces "fin_cifar100_cifar100_seed1" → strip "_cifar100_seed1" → "fin_cifar100"
+                # Baselines produce "mobilenet_fine_cifar100_seed1" → "mobilenet_fine"
                 model_name = re.sub(r'_(cifar100|cifar10)_seed\d+$', '', directory)
                 
                 if model_name not in model_checkpoints:
@@ -1929,7 +1938,7 @@ def evaluate(
     
     # Save JSON results
     json_results = save_json_results(
-        all_seed_results, output_dir, cfg, 
+        all_seed_results, output_dir, cfg,
         argparse.Namespace(
             dataset=dataset,
             seeds=seeds,
