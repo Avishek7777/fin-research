@@ -199,7 +199,7 @@ def apply_ablation_config(cfg: dict, ablation: str, dataset: str = "cifar100") -
     cfg["data"]["dataset"] = dataset
     if dataset == "cifar10":
         cfg["data"]["num_fine_classes"] = CIFAR10_CLASSES
-        cfg["data"]["num_coarse_classes"] = 2  # Fake coarse classes for CIFAR-10
+        cfg["data"]["num_coarse_classes"] = CIFAR10_CLASSES
     else:
         cfg["data"]["num_fine_classes"] = CIFAR100_CLASSES
         cfg["data"]["num_coarse_classes"] = COARSE_CLASSES_C100
@@ -283,6 +283,8 @@ def run_single_experiment(
         checkpoint_path=ckpt_path,
         run_tsne=False,
         output_dir=eval_output,
+        dataset=dataset,
+        seeds=[seed],
     )
     
     # Load accuracy from checkpoint
@@ -477,11 +479,14 @@ def print_component_importance_summary(
         stats = aggregated[ab_name]
         deg = compute_degradation(stats, baseline)
         
-        # Statistical significance
-        _, p_val = statistical_significance_test(
-            np.array(stats["individual_results"]["joint_acc"]),
-            np.array(baseline["individual_results"]["joint_acc"]),
-        )
+        if stats["n_seeds"] >= 2:
+            # Statistical significance
+            _, p_val = statistical_significance_test(
+                np.array(stats["individual_results"]["joint_acc"]),
+                np.array(baseline["individual_results"]["joint_acc"]),
+            )
+        else:
+            p_val = 1.0
         
         rankings.append({
             "name": ab_name,
@@ -613,8 +618,8 @@ def create_ablation_plots(
     
     degradation_matrix = []
     for name in names:
-        stats = aggregated[name]
-        deg = compute_degradation(stats, baseline)
+        ab_stats = aggregated[name]
+        deg = compute_degradation(ab_stats, baseline)
         degradation_matrix.append([
             deg["fine_degradation_pct"],
             deg["coarse_degradation_pct"],
