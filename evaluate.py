@@ -301,80 +301,97 @@ def load_model(
     device: torch.device,
     dataset: str = "cifar100"
 ):
-    """Load model from checkpoint - supports FIN and baseline models."""
+    """Load model from checkpoint - supports FIN and baseline models.
+
+    Model type is detected from the state dict keys (ground truth),
+    with the checkpoint directory name used only as a fallback hint.
+
+    Key layouts per class (from baselines.py):
+      MobileNetV2Fine : keys start with "backbone."  (self.backbone = mobilenet_v2(...))
+      MobileNetV2Aux  : keys start with "features." / "fine_head." / "coarse_head."
+                        (self.features = backbone.features, flat layout, no wrapper)
+      FIN             : keys start with "level"
+    """
     from copy import deepcopy
-    
-    # Determine model type from checkpoint path
-    checkpoint_name = os.path.basename(os.path.dirname(checkpoint_path))
-    is_mobilenet_fine = "mobilenet_fine" in checkpoint_name
-    is_mobilenet_aux = "mobilenet_aux" in checkpoint_name
-    is_fin = not (is_mobilenet_fine or is_mobilenet_aux)
-    
-    # Load checkpoint first to inspect structure
+
+    # ── Load raw checkpoint ───────────────────────────────────────────────────
     ckpt = torch.load(checkpoint_path, map_location=device)
-    
-    # Extract state dict
+
+    # Extract state dict (train.py wraps it under "model_state")
     if "model_state" in ckpt:
         state_dict = ckpt["model_state"]
     elif "state_dict" in ckpt:
         state_dict = ckpt["state_dict"]
     else:
         state_dict = ckpt
-    
-    # Determine model type from state dict if path detection isn't clear
-    has_fin_keys = any(k.startswith("level") for k in state_dict.keys())
-    has_features_keys = any(k.startswith("features") for k in state_dict.keys())
-    
-    if has_features_keys:
-        is_mobilenet_fine = "coarse_head" not in state_dict
-        is_mobilenet_aux = "coarse_head" in state_dict
-        is_fin = False
-    elif has_fin_keys:
-        is_fin = True
-        is_mobilenet_fine = False
-        is_mobilenet_aux = False
-    
-    # Load appropriate model type
-    if is_mobilenet_fine:
-        # Import baseline models
-        import sys
+
+    # ── Detect model type from state dict keys (authoritative) ───────────────
+    keys = set(state_dict.keys())
+    has_fin_keys      = any(k.startswith("level")    for k in keys)
+    has_backbone_keys = any(k.startswith("backbone") for k in keys)  # MobileNetV2Fine
+    has_features_keys = any(k.startswith("features") for k in keys)  # MobileNetV2Aux
+
+    if has_fin_keys:
+        model_type = "fin"
+    elif has_backbone_keys:
+        # MobileNetV2Fine wraps everything under self.backbone
+        model_type = "mobilenet_fine"
+    elif has_features_keys:
+        # MobileNetV2Aux exposes self.features / self.fine_head / self.coarse_head flat
+        model_type = "mobilenet_aux"
+    else:
+        # Fall back to directory name hint
+        checkpoint_name = os.path.basename(os.path.dirname(checkpoint_path))
+        if "mobilenet_aux" in checkpoint_name:
+            model_type = "mobilenet_aux"
+        elif "mobilenet_fine" in checkpoint_name:
+            model_type = "mobilenet_fine"
+        else:
+            model_type = "fin"
+
+    print(f"[Load] Detected model type: {model_type}")
+
+    # ── Class counts ─────────────────────────────────────────────────────────
+    is_cifar10 = (dataset == "cifar10")
+    num_fine   = 10  if is_cifar10 else 100
+    num_coarse = 10  if is_cifar10 else 20
+
+    # ── Instantiate model ─────────────────────────────────────────────────────
+    if model_type == "mobilenet_fine":
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "experiments"))
         from baselines import MobileNetV2Fine
-        
-        num_classes = get_num_classes(dataset)
-        model = MobileNetV2Fine(num_classes=num_classes).to(device)
-        print(f"[Load] Loaded MobileNetV2Fine")
-        
-    elif is_mobilenet_aux:
-        import sys
+        # MobileNetV2Fine.__init__ takes: num_classes, num_coarse_classes, is_cifar10
+        model = MobileNetV2Fine(
+            num_classes       = num_fine,
+            num_coarse_classes= num_coarse,
+            is_cifar10        = is_cifar10,
+        ).to(device)
+        print(f"[Load] Instantiated MobileNetV2Fine (num_classes={num_fine})")
+
+    elif model_type == "mobilenet_aux":
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "experiments"))
         from baselines import MobileNetV2Aux
-        
-        num_classes = get_num_classes(dataset)
-        model = MobileNetV2Aux(num_classes=num_classes).to(device)
-        print(f"[Load] Loaded MobileNetV2Aux")
-        
-    else:  # FIN model
+        # MobileNetV2Aux.__init__ takes: num_fine, num_coarse, lambda_fine, lambda_coarse, is_cifar10
+        model = MobileNetV2Aux(
+            num_fine   = num_fine,
+            num_coarse = num_coarse,
+            is_cifar10 = is_cifar10,
+        ).to(device)
+        print(f"[Load] Instantiated MobileNetV2Aux (num_fine={num_fine}, num_coarse={num_coarse})")
+
+    else:  # FIN
         model_cfg = deepcopy(cfg)
-        
-        # Update num_classes in data section
         if "data" not in model_cfg:
             model_cfg["data"] = {}
-        
-        if dataset == "cifar10":
-            model_cfg["data"]["num_fine_classes"] = 10
-            model_cfg["data"]["num_coarse_classes"] = 10
-        else:  # cifar100
-            model_cfg["data"]["num_fine_classes"] = 100
-            model_cfg["data"]["num_coarse_classes"] = 20
-        
+        model_cfg["data"]["num_fine_classes"]   = num_fine
+        model_cfg["data"]["num_coarse_classes"] = num_coarse
         model = build_fin(model_cfg).to(device)
-        print(f"[Load] Loaded FIN")
-    
-    # Load state dict
+        print(f"[Load] Instantiated FIN (num_fine={num_fine}, num_coarse={num_coarse})")
+
+    # ── Load weights ─────────────────────────────────────────────────────────
     model.load_state_dict(state_dict)
     model.eval()
-    print(f"[Load] Loaded checkpoint: {checkpoint_path}")
+    print(f"[Load] Weights loaded from: {checkpoint_path}")
     if "metrics" in ckpt:
         print(f"[Load] Checkpoint metrics: {ckpt['metrics']}")
     return model
@@ -528,8 +545,11 @@ def extract_representations_with_diagnostics(
         else:
             if hasattr(model, 'encode_deterministic'):
                 z0, z1, z2 = model.encode_deterministic(x)
-            else:
+            elif hasattr(model, 'features'):  # MobileNetV2Aux
                 feat = model.features(x).mean([2, 3])
+                z0 = z1 = z2 = feat
+            else:  # MobileNetV2Fine
+                feat = model.backbone.features(x).mean([2, 3])
                 z0 = z1 = z2 = feat
         
         z0_list.append(z0.cpu().numpy())
@@ -594,17 +614,18 @@ def evaluate_accuracy_and_representations(
         fine_labels = fine_labels.to(device)
         coarse_labels = get_coarse_labels(fine_labels, dataset).to(device)
         
-        # FIN and baseline models have different forward signatures
+        # FIN and baseline models have different forward signatures and return types.
         if hasattr(model, 'level0'):  # FIN model
             out = model(x, fine_labels, coarse_labels)
             fine_logits   = out.fine_logits
             coarse_logits = out.coarse_logits
-        else:  # Baseline MobileNet
-            fine_logits = model(x)
-            if hasattr(model, 'coarse_head'):
-                coarse_logits = model.coarse_head(model.features(x).mean([2, 3]))
-            else:
-                coarse_logits = fine_logits
+        elif hasattr(model, 'features'):  # MobileNetV2Aux (flat layout)
+            feat = model.features(x).mean([2, 3])  # (B, 1280)
+            fine_logits   = model.fine_head(feat)
+            coarse_logits = model.coarse_head(feat)
+        else:  # MobileNetV2Fine (backbone wrapper layout)
+            fine_logits   = model.backbone(x)
+            coarse_logits = fine_logits  # no coarse head
         
         fine_correct   += (fine_logits.argmax(1)   == fine_labels).sum().item()
         coarse_correct += (coarse_logits.argmax(1) == coarse_labels).sum().item()
@@ -614,9 +635,11 @@ def evaluate_accuracy_and_representations(
         if samples_count < max_samples:
             if hasattr(model, 'encode_deterministic'):
                 z0, z1, z2 = model.encode_deterministic(x)
-            else:
-                # For baselines, use the feature extractor output for all three levels
-                feat = model.features(x).mean([2, 3])  # global avg pool → (B, C)
+            elif hasattr(model, 'features'):  # MobileNetV2Aux
+                feat = model.features(x).mean([2, 3])
+                z0 = z1 = z2 = feat
+            else:  # MobileNetV2Fine
+                feat = model.backbone.features(x).mean([2, 3])
                 z0 = z1 = z2 = feat
             
             remaining = max_samples - samples_count
@@ -681,9 +704,11 @@ def extract_representations(
         
         if hasattr(model, 'encode_deterministic'):
             z0, z1, z2 = model.encode_deterministic(x)
-        else:
-            # For baselines, use the feature extractor output for all three levels
-            feat = model.features(x).mean([2, 3])  # global avg pool → (B, C)
+        elif hasattr(model, 'features'):  # MobileNetV2Aux
+            feat = model.features(x).mean([2, 3])
+            z0 = z1 = z2 = feat
+        else:  # MobileNetV2Fine
+            feat = model.backbone.features(x).mean([2, 3])
             z0 = z1 = z2 = feat
         
         z0_list.append(z0.cpu().numpy())
@@ -734,18 +759,22 @@ def evaluate_accuracy(
         fine_labels = fine_labels.to(device)
         coarse_labels = get_coarse_labels(fine_labels, dataset).to(device)
         
-        # FIN and baseline models have different forward signatures
+        # FIN and baseline models have different forward signatures and return types.
+        # FIN: model(x, fine_labels, coarse_labels) -> namedtuple with .fine_logits / .coarse_logits
+        # Baselines: model(x, fine_labels, coarse_labels) -> dict with "fine_acc" etc.
+        # For accuracy counting we need logits, so we call backbone/features directly
+        # for baselines rather than going through their loss-computing forward.
         if hasattr(model, 'level0'):  # FIN model
             out = model(x, fine_labels, coarse_labels)
             fine_logits   = out.fine_logits
             coarse_logits = out.coarse_logits
-        else:  # Baseline MobileNet
-            fine_logits = model(x)
-            # MobileNetV2Aux has a separate coarse head; MobileNetV2Fine doesn't
-            if hasattr(model, 'coarse_head'):
-                coarse_logits = model.coarse_head(model.features(x).mean([2, 3]))
-            else:
-                coarse_logits = fine_logits
+        elif hasattr(model, 'features'):  # MobileNetV2Aux (flat layout)
+            feat = model.features(x).mean([2, 3])  # (B, 1280)
+            fine_logits   = model.fine_head(feat)
+            coarse_logits = model.coarse_head(feat)
+        else:  # MobileNetV2Fine (backbone wrapper layout)
+            fine_logits   = model.backbone(x)
+            coarse_logits = fine_logits  # no coarse head; coarse derived from fine
         
         fine_correct   += (fine_logits.argmax(1)   == fine_labels).sum().item()
         coarse_correct += (coarse_logits.argmax(1) == coarse_labels).sum().item()
