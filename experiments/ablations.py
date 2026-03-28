@@ -261,7 +261,14 @@ def run_single_experiment(
     train_single(exp_cfg, dataset, seed)
     
     # Evaluate
-    ckpt_path = os.path.join(exp_cfg["experiment"]["checkpoint_dir"], f"best_seed{seed}.pt")
+    # train_single appends "{exp_name}_{dataset}_seed{seed}" as a subdirectory,
+    # so the actual saved path is one level deeper than checkpoint_dir.
+    exp_name = exp_cfg["experiment"]["name"]   # e.g. "fin_no_bandwidth_s1_cifar100"
+    ckpt_subdir = os.path.join(
+        exp_cfg["experiment"]["checkpoint_dir"],
+        f"{exp_name}_{dataset}_seed{seed}",
+    )
+    ckpt_path = os.path.join(ckpt_subdir, f"best_seed{seed}.pt")
     
     if not os.path.exists(ckpt_path):
         print(f"[Warning] Checkpoint not found: {ckpt_path}")
@@ -432,13 +439,13 @@ def print_ablation_table(
         if ab_name not in aggregated:
             continue
         
-        stats = aggregated[ab_name]
-        deg = compute_degradation(stats, baseline)
+        ab_stats = aggregated[ab_name]
+        deg = compute_degradation(ab_stats, baseline)
         
         significance = ""
-        if stats["n_seeds"] >= 2:
+        if ab_stats["n_seeds"] >= 2:
             _, p_val = statistical_significance_test(
-                np.array(stats["individual_results"]["joint_acc"]),
+                np.array(ab_stats["individual_results"]["joint_acc"]),
                 np.array(baseline["individual_results"]["joint_acc"]),
             )
             if p_val < 0.01:
@@ -448,9 +455,9 @@ def print_ablation_table(
         
         print(
             f"{f'— {ab_name}':<30} "
-            f"{format_metric(stats['fine_acc_mean'], stats['fine_acc_std']):<18} "
-            f"{format_metric(stats['coarse_acc_mean'], stats['coarse_acc_std']):<18} "
-            f"{format_metric(stats['joint_acc_mean'], stats['joint_acc_std']):<18} "
+            f"{format_metric(ab_stats['fine_acc_mean'], ab_stats['fine_acc_std']):<18} "
+            f"{format_metric(ab_stats['coarse_acc_mean'], ab_stats['coarse_acc_std']):<18} "
+            f"{format_metric(ab_stats['joint_acc_mean'], ab_stats['joint_acc_std']):<18} "
             f"{deg['joint_degradation_pct']:+.2f}{significance:<6}"
         )
     
@@ -476,13 +483,13 @@ def print_component_importance_summary(
         if ab_name not in aggregated:
             continue
         
-        stats = aggregated[ab_name]
-        deg = compute_degradation(stats, baseline)
+        ab_stats = aggregated[ab_name]
+        deg = compute_degradation(ab_stats, baseline)
         
-        if stats["n_seeds"] >= 2:
+        if ab_stats["n_seeds"] >= 2:
             # Statistical significance
             _, p_val = statistical_significance_test(
-                np.array(stats["individual_results"]["joint_acc"]),
+                np.array(ab_stats["individual_results"]["joint_acc"]),
                 np.array(baseline["individual_results"]["joint_acc"]),
             )
         else:
@@ -932,7 +939,7 @@ Examples:
         }
         # Add degradation
         deg = compute_degradation(value["ablation_stats"], value["baseline"])
-        serializable_summary[key]["degradation"] = deg
+        serializable_summary[key]["degradation"] = {k: float(v) for k, v in deg.items()}
         
         # Add statistical significance
         if value["ablation_stats"].get("n_seeds", 0) >= 2:
@@ -940,8 +947,8 @@ Examples:
                 np.array(value["ablation_stats"]["individual_results"]["joint_acc"]),
                 np.array(value["baseline"]["individual_results"]["joint_acc"]),
             )
-            serializable_summary[key]["p_value"] = p_val
-            serializable_summary[key]["significant"] = p_val < 0.05
+            serializable_summary[key]["p_value"] = float(p_val)
+            serializable_summary[key]["significant"] = bool(p_val < 0.05)
     
     with open(summary_path, "w") as f:
         json.dump(serializable_summary, f, indent=2)
