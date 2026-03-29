@@ -1871,23 +1871,32 @@ def evaluate(
                 if os.path.isdir(os.path.join(checkpoint_dir, d))]
         
         for directory in dirs:
-            # Extract seed number from directory name
+            # Extract seed number
             seed_match = re.search(r'seed(\d+)', directory)
             if not seed_match:
                 continue
             seed = int(seed_match.group(1))
 
-            # Only pick up directories that belong to one of the datasets we are
-            # actually evaluating. This prevents a cifar100 checkpoint being loaded
-            # when --dataset cifar10 is requested (and vice-versa).
-            dir_datasets = [ds for ds in datasets_to_eval if ds in directory]
-            if not dir_datasets:
+            # Determine which dataset this directory belongs to by matching the
+            # trailing pattern: ..._{dataset}_seed{N}
+            # This avoids false positives like "cifar100" matching inside
+            # "fin_cifar100_cifar10_cifar10_seed1" when looking for cifar100.
+            trailing_match = re.search(r'_(cifar100|cifar10)_seed\d+$', directory)
+            if not trailing_match:
+                continue
+            dir_dataset = trailing_match.group(1)  # the actual dataset of this checkpoint
+
+            # Skip if this directory's dataset is not one we are evaluating
+            if dir_dataset not in datasets_to_eval:
                 continue
 
-            # Build a model name that retains the dataset tag so that
-            # mobilenet_aux_cifar100 and mobilenet_aux_cifar10 stay as separate keys.
-            # Strip only the trailing _seed{N} so the dataset portion is preserved.
-            model_name = re.sub(r'_seed\d+$', '', directory)
+            # Model name: strip the trailing _{dataset}_seed{N} to get a clean key.
+            # Examples:
+            #   fin_cifar100_cifar100_cifar100_seed1 → fin_cifar100_cifar100  (FIN cifar100)
+            #   fin_cifar100_cifar10_cifar10_seed3   → fin_cifar100_cifar10   (FIN cifar10)
+            #   mobilenet_aux_cifar100_seed1          → mobilenet_aux_cifar100
+            #   mobilenet_fine_cifar10_seed2          → mobilenet_fine_cifar10
+            model_name = re.sub(r'_(cifar100|cifar10)_seed\d+$', '', directory)
 
             if model_name not in model_checkpoints:
                 model_checkpoints[model_name] = {}
