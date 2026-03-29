@@ -1871,27 +1871,35 @@ def evaluate(
                 if os.path.isdir(os.path.join(checkpoint_dir, d))]
         
         for directory in dirs:
-            # Extract seed number from directory name (e.g., "fin_cifar100_cifar100_cifar100_seed1" -> seed=1)
+            # Extract seed number from directory name
             seed_match = re.search(r'seed(\d+)', directory)
-            if seed_match:
-                seed = int(seed_match.group(1))
-                # Extract model name by removing the trailing dataset + seed suffix.
-                # train.py appends the dataset name once in main(), so FIN on cifar100
-                # produces "fin_cifar100_cifar100_seed1" → strip "_cifar100_seed1" → "fin_cifar100"
-                # Baselines produce "mobilenet_fine_cifar100_seed1" → "mobilenet_fine"
-                model_name = re.sub(r'_(cifar100|cifar10)_seed\d+$', '', directory)
-                
-                if model_name not in model_checkpoints:
-                    model_checkpoints[model_name] = {}
-                
-                # Try both best_seed{N}.pt and best.pt patterns
-                ckpt_path = os.path.join(checkpoint_dir, directory, f"best_seed{seed}.pt")
-                if not os.path.exists(ckpt_path):
-                    ckpt_path = os.path.join(checkpoint_dir, directory, "best.pt")
-                
-                if os.path.exists(ckpt_path):
-                    model_checkpoints[model_name][seed] = ckpt_path
-                    print(f"[Found] {model_name} seed {seed}: {ckpt_path}")
+            if not seed_match:
+                continue
+            seed = int(seed_match.group(1))
+
+            # Only pick up directories that belong to one of the datasets we are
+            # actually evaluating. This prevents a cifar100 checkpoint being loaded
+            # when --dataset cifar10 is requested (and vice-versa).
+            dir_datasets = [ds for ds in datasets_to_eval if ds in directory]
+            if not dir_datasets:
+                continue
+
+            # Build a model name that retains the dataset tag so that
+            # mobilenet_aux_cifar100 and mobilenet_aux_cifar10 stay as separate keys.
+            # Strip only the trailing _seed{N} so the dataset portion is preserved.
+            model_name = re.sub(r'_seed\d+$', '', directory)
+
+            if model_name not in model_checkpoints:
+                model_checkpoints[model_name] = {}
+
+            # Try both best_seed{N}.pt and best.pt patterns
+            ckpt_path = os.path.join(checkpoint_dir, directory, f"best_seed{seed}.pt")
+            if not os.path.exists(ckpt_path):
+                ckpt_path = os.path.join(checkpoint_dir, directory, "best.pt")
+
+            if os.path.exists(ckpt_path):
+                model_checkpoints[model_name][seed] = ckpt_path
+                print(f"[Found] {model_name} seed {seed}: {ckpt_path}")
         
         # Evaluate each model and seed
         for model_name, seed_paths in model_checkpoints.items():
