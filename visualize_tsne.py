@@ -191,15 +191,16 @@ def make_z2_figure(
     Main paper figure — z2 side-by-side comparison.
     Left: Full FIN (with bandwidth constraint)
     Right: No bandwidth constraint
+    Legend: horizontal, centered at bottom, above subtitle
     """
-    fig, axes = plt.subplots(1, 2, figsize=(9, 4.2))
-    fig.subplots_adjust(wspace=0.05)
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4.8))
+    fig.subplots_adjust(wspace=0.05, bottom=0.22)
 
     plot_tsne_panel(
         axes[0], full_z2_tsne, labels, class_names,
         title="FIN (with bandwidth constraint)",
         palette=palette,
-        show_legend=True,
+        show_legend=False,
     )
     plot_tsne_panel(
         axes[1], nobw_z2_tsne, labels, class_names,
@@ -208,9 +209,26 @@ def make_z2_figure(
         show_legend=False,
     )
 
-    # Shared level label
+    # Horizontal legend centered below both panels
+    handles = [
+        plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=color,
+                   markersize=7, label=name)
+        for name, color in zip(class_names, palette)
+    ]
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        ncol=len(class_names),
+        fontsize=8,
+        framealpha=0.0,
+        handletextpad=0.2,
+        columnspacing=0.8,
+        bbox_to_anchor=(0.5, 0.09),
+    )
+
+    # Subtitle below legend
     fig.text(0.5, 0.01, "Level Z2 representations (t-SNE, seed 1)",
-             ha="center", fontsize=9, color="#555555")
+             ha="center", fontsize=8, color="#777777")
 
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
