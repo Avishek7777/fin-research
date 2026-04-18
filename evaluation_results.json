@@ -1,0 +1,919 @@
+{
+  "config": {
+    "dataset": "cifar10",
+    "seeds": [
+      1,
+      2,
+      3
+    ],
+    "checkpoint_dir": "checkpoints",
+    "checkpoint_file": null,
+    "model_config": {}
+  },
+  "per_model": {
+    "fin_cifar10_cifar10": {
+      "dataset": "cifar10",
+      "n_seeds": 3,
+      "per_seed": [
+        {
+          "seed": 1,
+          "checkpoint": "checkpoints/fin_cifar10_cifar10_cifar10_seed1/best_seed1.pt",
+          "accuracies": {
+            "fine_acc": 80.0,
+            "coarse_acc": 80.0,
+            "joint_acc": 160.0
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              0.5426699846654753,
+              0.5097558999234743
+            ],
+            [
+              0.5426699846654753,
+              1.0,
+              0.9367762241611497
+            ],
+            [
+              0.5097558999234743,
+              0.9367762241611497,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 512,
+              "var_mean": 0.7459282875061035,
+              "var_total": 0.8296970725059509,
+              "norm_mean": 20.74661636352539,
+              "norm_std": 0.8618295192718506,
+              "intrinsic_dim": 0.0597737490640269,
+              "participation_ratio": 26.540415753741897
+            },
+            "z1": {
+              "dim": 128,
+              "var_mean": 0.8434895277023315,
+              "var_total": 1.0718921422958374,
+              "norm_mean": 11.722874641418457,
+              "norm_std": 0.30402812361717224,
+              "intrinsic_dim": 0.057047875423625403,
+              "participation_ratio": 6.600486059128936
+            },
+            "z2": {
+              "dim": 32,
+              "var_mean": 1.4404945373535156,
+              "var_total": 1.675732970237732,
+              "norm_mean": 7.321943759918213,
+              "norm_std": 0.11309843510389328,
+              "intrinsic_dim": 0.0504357670338109,
+              "participation_ratio": 5.345290349156662
+            }
+          }
+        },
+        {
+          "seed": 2,
+          "checkpoint": "checkpoints/fin_cifar10_cifar10_cifar10_seed2/best_seed2.pt",
+          "accuracies": {
+            "fine_acc": 80.27,
+            "coarse_acc": 80.27,
+            "joint_acc": 160.54
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              0.5653675043726716,
+              0.5309940112151373
+            ],
+            [
+              0.5653675043726716,
+              1.0,
+              0.9418865814246967
+            ],
+            [
+              0.5309940112151373,
+              0.9418865814246967,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 512,
+              "var_mean": 0.7334511280059814,
+              "var_total": 0.8465471863746643,
+              "norm_mean": 20.93461799621582,
+              "norm_std": 0.7373624444007874,
+              "intrinsic_dim": 0.05969854904887568,
+              "participation_ratio": 25.35163984212558
+            },
+            "z1": {
+              "dim": 128,
+              "var_mean": 0.7581762075424194,
+              "var_total": 1.059541940689087,
+              "norm_mean": 11.652058601379395,
+              "norm_std": 0.2834727466106415,
+              "intrinsic_dim": 0.0563286517988962,
+              "participation_ratio": 6.336252330060674
+            },
+            "z2": {
+              "dim": 32,
+              "var_mean": 1.359023094177246,
+              "var_total": 1.719606637954712,
+              "norm_mean": 7.417438983917236,
+              "norm_std": 0.09970874339342117,
+              "intrinsic_dim": 0.0503644355990917,
+              "participation_ratio": 5.158158844982533
+            }
+          }
+        },
+        {
+          "seed": 3,
+          "checkpoint": "checkpoints/fin_cifar10_cifar10_cifar10_seed3/best_seed3.pt",
+          "accuracies": {
+            "fine_acc": 79.74,
+            "coarse_acc": 79.74,
+            "joint_acc": 159.48
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              0.5440954932234826,
+              0.5046871172978095
+            ],
+            [
+              0.5440954932234826,
+              1.0,
+              0.9110013436143861
+            ],
+            [
+              0.5046871172978095,
+              0.9110013436143861,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 512,
+              "var_mean": 0.748981773853302,
+              "var_total": 0.8383448123931885,
+              "norm_mean": 20.84145164489746,
+              "norm_std": 0.8311411142349243,
+              "intrinsic_dim": 0.059790526154001024,
+              "participation_ratio": 24.984003799225615
+            },
+            "z1": {
+              "dim": 128,
+              "var_mean": 0.7379310131072998,
+              "var_total": 1.0478459596633911,
+              "norm_mean": 11.593194961547852,
+              "norm_std": 0.3126133382320404,
+              "intrinsic_dim": 0.056602364002276126,
+              "participation_ratio": 6.648654287585163
+            },
+            "z2": {
+              "dim": 32,
+              "var_mean": 1.4112540483474731,
+              "var_total": 1.773740291595459,
+              "norm_mean": 7.532150745391846,
+              "norm_std": 0.16249527037143707,
+              "intrinsic_dim": 0.05064719381544691,
+              "participation_ratio": 4.843654722782833
+            }
+          }
+        }
+      ],
+      "summary_statistics": {
+        "accuracies": {
+          "fine_acc": {
+            "mean": 80.00333333333333,
+            "std": 0.21638443156156686,
+            "min": 79.74,
+            "max": 80.27
+          },
+          "coarse_acc": {
+            "mean": 80.00333333333333,
+            "std": 0.21638443156156686,
+            "min": 79.74,
+            "max": 80.27
+          },
+          "joint_acc": {
+            "mean": 160.00666666666666,
+            "std": 0.43276886312313373,
+            "min": 159.48,
+            "max": 160.54
+          }
+        },
+        "cka": {
+          "01": {
+            "mean": 0.5507109940872098,
+            "std": 0.010380044604050676
+          },
+          "12": {
+            "mean": 0.9298880497334108,
+            "std": 0.013516895325482515
+          },
+          "02": {
+            "mean": 0.5151456761454737,
+            "std": 0.011395918353715026
+          }
+        },
+        "intrinsic_dim": {
+          "z0": {
+            "mean": 0.05975427475563453,
+            "std": 3.9994862022769264e-05
+          },
+          "z1": {
+            "mean": 0.05665963040826591,
+            "std": 0.000296400895785189
+          },
+          "z2": {
+            "mean": 0.05048246548278317,
+            "std": 0.00012006556842383298
+          }
+        },
+        "model_info": {
+          "flops_M": 1.008384,
+          "params_M": 3.779815
+        }
+      }
+    },
+    "fin_cifar100_cifar10": {
+      "dataset": "cifar10",
+      "n_seeds": 3,
+      "per_seed": [
+        {
+          "seed": 1,
+          "checkpoint": "checkpoints/fin_cifar100_cifar10_cifar10_seed1/best_seed1.pt",
+          "accuracies": {
+            "fine_acc": 79.97,
+            "coarse_acc": 79.97,
+            "joint_acc": 159.94
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              0.5530247538788565,
+              0.5167814194450884
+            ],
+            [
+              0.5530247538788565,
+              1.0,
+              0.9358007611001171
+            ],
+            [
+              0.5167814194450884,
+              0.9358007611001171,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 512,
+              "var_mean": 0.7459282875061035,
+              "var_total": 0.8296970725059509,
+              "norm_mean": 20.74661636352539,
+              "norm_std": 0.8618295192718506,
+              "intrinsic_dim": 0.0597737490640269,
+              "participation_ratio": 26.540415753741897
+            },
+            "z1": {
+              "dim": 128,
+              "var_mean": 0.8434895277023315,
+              "var_total": 1.0718921422958374,
+              "norm_mean": 11.722874641418457,
+              "norm_std": 0.30402812361717224,
+              "intrinsic_dim": 0.057047875423625403,
+              "participation_ratio": 6.600486059128936
+            },
+            "z2": {
+              "dim": 32,
+              "var_mean": 1.4404945373535156,
+              "var_total": 1.675732970237732,
+              "norm_mean": 7.321943759918213,
+              "norm_std": 0.11309843510389328,
+              "intrinsic_dim": 0.0504357670338109,
+              "participation_ratio": 5.345290349156662
+            }
+          }
+        },
+        {
+          "seed": 2,
+          "checkpoint": "checkpoints/fin_cifar100_cifar10_cifar10_seed2/best_seed2.pt",
+          "accuracies": {
+            "fine_acc": 79.95,
+            "coarse_acc": 79.95,
+            "joint_acc": 159.9
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              0.5591987492289536,
+              0.5214297708912381
+            ],
+            [
+              0.5591987492289536,
+              1.0,
+              0.9393379865220435
+            ],
+            [
+              0.5214297708912381,
+              0.9393379865220435,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 512,
+              "var_mean": 0.7334511280059814,
+              "var_total": 0.8465471863746643,
+              "norm_mean": 20.93461799621582,
+              "norm_std": 0.7373624444007874,
+              "intrinsic_dim": 0.05969854904887568,
+              "participation_ratio": 25.35163984212558
+            },
+            "z1": {
+              "dim": 128,
+              "var_mean": 0.7581762075424194,
+              "var_total": 1.059541940689087,
+              "norm_mean": 11.652058601379395,
+              "norm_std": 0.2834727466106415,
+              "intrinsic_dim": 0.0563286517988962,
+              "participation_ratio": 6.336252330060674
+            },
+            "z2": {
+              "dim": 32,
+              "var_mean": 1.359023094177246,
+              "var_total": 1.719606637954712,
+              "norm_mean": 7.417438983917236,
+              "norm_std": 0.09970874339342117,
+              "intrinsic_dim": 0.0503644355990917,
+              "participation_ratio": 5.158158844982533
+            }
+          }
+        },
+        {
+          "seed": 3,
+          "checkpoint": "checkpoints/fin_cifar100_cifar10_cifar10_seed3/best_seed3.pt",
+          "accuracies": {
+            "fine_acc": 80.02,
+            "coarse_acc": 80.02,
+            "joint_acc": 160.04
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              0.5500338666216611,
+              0.5231247160798168
+            ],
+            [
+              0.5500338666216611,
+              1.0,
+              0.912622784652128
+            ],
+            [
+              0.5231247160798168,
+              0.912622784652128,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 512,
+              "var_mean": 0.748981773853302,
+              "var_total": 0.8383448123931885,
+              "norm_mean": 20.84145164489746,
+              "norm_std": 0.8311411142349243,
+              "intrinsic_dim": 0.059790526154001024,
+              "participation_ratio": 24.984003799225615
+            },
+            "z1": {
+              "dim": 128,
+              "var_mean": 0.7379310131072998,
+              "var_total": 1.0478459596633911,
+              "norm_mean": 11.593194961547852,
+              "norm_std": 0.3126133382320404,
+              "intrinsic_dim": 0.056602364002276126,
+              "participation_ratio": 6.648654287585163
+            },
+            "z2": {
+              "dim": 32,
+              "var_mean": 1.4112540483474731,
+              "var_total": 1.773740291595459,
+              "norm_mean": 7.532150745391846,
+              "norm_std": 0.16249527037143707,
+              "intrinsic_dim": 0.05064719381544691,
+              "participation_ratio": 4.843654722782833
+            }
+          }
+        }
+      ],
+      "summary_statistics": {
+        "accuracies": {
+          "fine_acc": {
+            "mean": 79.98,
+            "std": 0.029439202887756852,
+            "min": 79.95,
+            "max": 80.02
+          },
+          "coarse_acc": {
+            "mean": 79.98,
+            "std": 0.029439202887756852,
+            "min": 79.95,
+            "max": 80.02
+          },
+          "joint_acc": {
+            "mean": 159.96,
+            "std": 0.058878405775513704,
+            "min": 159.9,
+            "max": 160.04
+          }
+        },
+        "cka": {
+          "01": {
+            "mean": 0.5540857899098238,
+            "std": 0.003816029035146467
+          },
+          "12": {
+            "mean": 0.9292538440914294,
+            "std": 0.011848265540479366
+          },
+          "02": {
+            "mean": 0.5204453021387144,
+            "std": 0.0026815713170404284
+          }
+        },
+        "intrinsic_dim": {
+          "z0": {
+            "mean": 0.05975427475563453,
+            "std": 3.9994862022769264e-05
+          },
+          "z1": {
+            "mean": 0.05665963040826591,
+            "std": 0.000296400895785189
+          },
+          "z2": {
+            "mean": 0.05048246548278317,
+            "std": 0.00012006556842383298
+          }
+        },
+        "model_info": {
+          "flops_M": 1.008384,
+          "params_M": 3.779815
+        }
+      }
+    },
+    "mobilenet_fine": {
+      "dataset": "cifar10",
+      "n_seeds": 3,
+      "per_seed": [
+        {
+          "seed": 1,
+          "checkpoint": "checkpoints/mobilenet_fine_cifar10_seed1/best.pt",
+          "accuracies": {
+            "fine_acc": 85.12,
+            "coarse_acc": 85.12,
+            "joint_acc": 170.24
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 1280,
+              "var_mean": 0.14874573051929474,
+              "var_total": 0.14957743883132935,
+              "norm_mean": 18.73577880859375,
+              "norm_std": 4.276768684387207,
+              "intrinsic_dim": 0.061366303483530275,
+              "participation_ratio": 12.31964956611291
+            },
+            "z1": {
+              "dim": 1280,
+              "var_mean": 0.14874573051929474,
+              "var_total": 0.14957743883132935,
+              "norm_mean": 18.73577880859375,
+              "norm_std": 4.276768684387207,
+              "intrinsic_dim": 0.061366303483530275,
+              "participation_ratio": 12.31964956611291
+            },
+            "z2": {
+              "dim": 1280,
+              "var_mean": 0.14874573051929474,
+              "var_total": 0.14957743883132935,
+              "norm_mean": 18.73577880859375,
+              "norm_std": 4.276768684387207,
+              "intrinsic_dim": 0.061366303483530275,
+              "participation_ratio": 12.31964956611291
+            }
+          }
+        },
+        {
+          "seed": 2,
+          "checkpoint": "checkpoints/mobilenet_fine_cifar10_seed2/best.pt",
+          "accuracies": {
+            "fine_acc": 85.48,
+            "coarse_acc": 85.48,
+            "joint_acc": 170.96
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 1280,
+              "var_mean": 0.15219569206237793,
+              "var_total": 0.15322349965572357,
+              "norm_mean": 18.876508712768555,
+              "norm_std": 4.367420673370361,
+              "intrinsic_dim": 0.061260075427904126,
+              "participation_ratio": 11.790801520695398
+            },
+            "z1": {
+              "dim": 1280,
+              "var_mean": 0.15219569206237793,
+              "var_total": 0.15322349965572357,
+              "norm_mean": 18.876508712768555,
+              "norm_std": 4.367420673370361,
+              "intrinsic_dim": 0.061260075427904126,
+              "participation_ratio": 11.790801520695398
+            },
+            "z2": {
+              "dim": 1280,
+              "var_mean": 0.15219569206237793,
+              "var_total": 0.15322349965572357,
+              "norm_mean": 18.876508712768555,
+              "norm_std": 4.367420673370361,
+              "intrinsic_dim": 0.061260075427904126,
+              "participation_ratio": 11.790801520695398
+            }
+          }
+        },
+        {
+          "seed": 3,
+          "checkpoint": "checkpoints/mobilenet_fine_cifar10_seed3/best.pt",
+          "accuracies": {
+            "fine_acc": 85.34,
+            "coarse_acc": 85.34,
+            "joint_acc": 170.68
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 1280,
+              "var_mean": 0.1524372398853302,
+              "var_total": 0.15329709649085999,
+              "norm_mean": 19.008331298828125,
+              "norm_std": 4.253630638122559,
+              "intrinsic_dim": 0.061220771579066774,
+              "participation_ratio": 11.996929797988672
+            },
+            "z1": {
+              "dim": 1280,
+              "var_mean": 0.1524372398853302,
+              "var_total": 0.15329709649085999,
+              "norm_mean": 19.008331298828125,
+              "norm_std": 4.253630638122559,
+              "intrinsic_dim": 0.061220771579066774,
+              "participation_ratio": 11.996929797988672
+            },
+            "z2": {
+              "dim": 1280,
+              "var_mean": 0.1524372398853302,
+              "var_total": 0.15329709649085999,
+              "norm_mean": 19.008331298828125,
+              "norm_std": 4.253630638122559,
+              "intrinsic_dim": 0.061220771579066774,
+              "participation_ratio": 11.996929797988672
+            }
+          }
+        }
+      ],
+      "summary_statistics": {
+        "accuracies": {
+          "fine_acc": {
+            "mean": 85.31333333333335,
+            "std": 0.14817407180595218,
+            "min": 85.12,
+            "max": 85.48
+          },
+          "coarse_acc": {
+            "mean": 85.31333333333335,
+            "std": 0.14817407180595218,
+            "min": 85.12,
+            "max": 85.48
+          },
+          "joint_acc": {
+            "mean": 170.6266666666667,
+            "std": 0.29634814361190437,
+            "min": 170.24,
+            "max": 170.96
+          }
+        },
+        "cka": {
+          "01": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "12": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "02": {
+            "mean": 1.0,
+            "std": 0.0
+          }
+        },
+        "intrinsic_dim": {
+          "z0": {
+            "mean": 0.06128238349683373,
+            "std": 6.14715178421098e-05
+          },
+          "z1": {
+            "mean": 0.06128238349683373,
+            "std": 6.14715178421098e-05
+          },
+          "z2": {
+            "mean": 0.06128238349683373,
+            "std": 6.14715178421098e-05
+          }
+        },
+        "model_info": {
+          "flops_M": 86.182208,
+          "params_M": 2.236682
+        }
+      }
+    },
+    "mobilenet_aux": {
+      "dataset": "cifar10",
+      "n_seeds": 3,
+      "per_seed": [
+        {
+          "seed": 1,
+          "checkpoint": "checkpoints/mobilenet_aux_cifar10_seed1/best.pt",
+          "accuracies": {
+            "fine_acc": 85.61,
+            "coarse_acc": 85.61,
+            "joint_acc": 171.22
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 1280,
+              "var_mean": 0.14555494487285614,
+              "var_total": 0.1470116376876831,
+              "norm_mean": 18.636693954467773,
+              "norm_std": 4.062994003295898,
+              "intrinsic_dim": 0.06163541163196002,
+              "participation_ratio": 11.709444887489306
+            },
+            "z1": {
+              "dim": 1280,
+              "var_mean": 0.14555494487285614,
+              "var_total": 0.1470116376876831,
+              "norm_mean": 18.636693954467773,
+              "norm_std": 4.062994003295898,
+              "intrinsic_dim": 0.06163541163196002,
+              "participation_ratio": 11.709444887489306
+            },
+            "z2": {
+              "dim": 1280,
+              "var_mean": 0.14555494487285614,
+              "var_total": 0.1470116376876831,
+              "norm_mean": 18.636693954467773,
+              "norm_std": 4.062994003295898,
+              "intrinsic_dim": 0.06163541163196002,
+              "participation_ratio": 11.709444887489306
+            }
+          }
+        },
+        {
+          "seed": 2,
+          "checkpoint": "checkpoints/mobilenet_aux_cifar10_seed2/best.pt",
+          "accuracies": {
+            "fine_acc": 85.6,
+            "coarse_acc": 85.6,
+            "joint_acc": 171.2
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 1280,
+              "var_mean": 0.14854773879051208,
+              "var_total": 0.1503075808286667,
+              "norm_mean": 18.666461944580078,
+              "norm_std": 4.289503574371338,
+              "intrinsic_dim": 0.0613062995751702,
+              "participation_ratio": 11.288701309904075
+            },
+            "z1": {
+              "dim": 1280,
+              "var_mean": 0.14854773879051208,
+              "var_total": 0.1503075808286667,
+              "norm_mean": 18.666461944580078,
+              "norm_std": 4.289503574371338,
+              "intrinsic_dim": 0.0613062995751702,
+              "participation_ratio": 11.288701309904075
+            },
+            "z2": {
+              "dim": 1280,
+              "var_mean": 0.14854773879051208,
+              "var_total": 0.1503075808286667,
+              "norm_mean": 18.666461944580078,
+              "norm_std": 4.289503574371338,
+              "intrinsic_dim": 0.0613062995751702,
+              "participation_ratio": 11.288701309904075
+            }
+          }
+        },
+        {
+          "seed": 3,
+          "checkpoint": "checkpoints/mobilenet_aux_cifar10_seed3/best.pt",
+          "accuracies": {
+            "fine_acc": 85.94,
+            "coarse_acc": 85.94,
+            "joint_acc": 171.88
+          },
+          "cka_matrix": [
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ]
+          ],
+          "representation_stats": {
+            "z0": {
+              "dim": 1280,
+              "var_mean": 0.15508976578712463,
+              "var_total": 0.15679946541786194,
+              "norm_mean": 19.11063003540039,
+              "norm_std": 4.203313827514648,
+              "intrinsic_dim": 0.061112823754177856,
+              "participation_ratio": 11.525909430169552
+            },
+            "z1": {
+              "dim": 1280,
+              "var_mean": 0.15508976578712463,
+              "var_total": 0.15679946541786194,
+              "norm_mean": 19.11063003540039,
+              "norm_std": 4.203313827514648,
+              "intrinsic_dim": 0.061112823754177856,
+              "participation_ratio": 11.525909430169552
+            },
+            "z2": {
+              "dim": 1280,
+              "var_mean": 0.15508976578712463,
+              "var_total": 0.15679946541786194,
+              "norm_mean": 19.11063003540039,
+              "norm_std": 4.203313827514648,
+              "intrinsic_dim": 0.061112823754177856,
+              "participation_ratio": 11.525909430169552
+            }
+          }
+        }
+      ],
+      "summary_statistics": {
+        "accuracies": {
+          "fine_acc": {
+            "mean": 85.71666666666665,
+            "std": 0.15797327481430426,
+            "min": 85.6,
+            "max": 85.94
+          },
+          "coarse_acc": {
+            "mean": 85.71666666666665,
+            "std": 0.15797327481430426,
+            "min": 85.6,
+            "max": 85.94
+          },
+          "joint_acc": {
+            "mean": 171.4333333333333,
+            "std": 0.3159465496286085,
+            "min": 171.2,
+            "max": 171.88
+          }
+        },
+        "cka": {
+          "01": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "12": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "02": {
+            "mean": 1.0,
+            "std": 0.0
+          }
+        },
+        "intrinsic_dim": {
+          "z0": {
+            "mean": 0.06135151165376936,
+            "std": 0.00021572763930422247
+          },
+          "z1": {
+            "mean": 0.06135151165376936,
+            "std": 0.00021572763930422247
+          },
+          "z2": {
+            "mean": 0.06135151165376936,
+            "std": 0.00021572763930422247
+          }
+        },
+        "model_info": {
+          "flops_M": 86.182208,
+          "params_M": 2.249492
+        }
+      }
+    }
+  },
+  "summary": {
+    "best_model_by_accuracy": "mobilenet_aux",
+    "best_model_by_efficiency": "mobilenet_fine"
+  }
+}
