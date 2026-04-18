@@ -48,8 +48,8 @@ data/
 # Checkpoints & model weights — too large for git
 # Use git-lfs or link from paper if needed
 # -----------------------------------------------------------------------------
-checkpoints/
-*.pt
+#checkpoints/
+#*.pt
 *.pth
 *.ckpt
 *.safetensors

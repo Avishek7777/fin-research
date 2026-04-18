@@ -40,7 +40,7 @@ LEVEL_LABELS = ["Z0\n(CNN)", "Z1\n(Trans.)", "Z2\n(MLP)"]
 MODEL_DISPLAY_NAMES = {
     "mobilenet_fine": "MobileNetV2\n(Fine-tuned)",
     "mobilenet_aux":  "MobileNetV2\n(+ Aux Head)",
-    "fin_cifar100_cifar10": "FIN\n(Ours)",
+    "fin_cifar100_cifar10": "HSBN\n(Ours)",
 }
 
 # Order for left-to-right panel layout

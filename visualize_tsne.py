@@ -198,13 +198,13 @@ def make_z2_figure(
 
     plot_tsne_panel(
         axes[0], full_z2_tsne, labels, class_names,
-        title="FIN (with bandwidth constraint)",
+        title="HSBN (with bandwidth constraint)",
         palette=palette,
         show_legend=False,
     )
     plot_tsne_panel(
         axes[1], nobw_z2_tsne, labels, class_names,
-        title="FIN (no bandwidth constraint)",
+        title="HSBN (no bandwidth constraint)",
         palette=palette,
         show_legend=False,
     )
@@ -257,7 +257,7 @@ def make_all_levels_figure(
 
         show_leg = (row == 0)
         plot_tsne_panel(axes[row, 0], full_tsne, labels, class_names,
-                        title=f"Full FIN — {lname}", palette=palette,
+                        title=f"Full HSBN — {lname}", palette=palette,
                         show_legend=show_leg)
         plot_tsne_panel(axes[row, 1], nobw_tsne, labels, class_names,
                         title=f"No bandwidth — {lname}", palette=palette,

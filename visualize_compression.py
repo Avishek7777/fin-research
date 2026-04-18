@@ -41,7 +41,7 @@ LEVEL_LABELS = ["Z0\n(CNN)", "Z1\n(Transformer)", "Z2\n(MLP)"]
 MODEL_DISPLAY_NAMES = {
     "mobilenet_fine":        "MobileNetV2 (Fine-tuned)",
     "mobilenet_aux":         "MobileNetV2 (+ Aux Head)",
-    "fin_cifar100_cifar10":  "FIN (Ours)",
+    "fin_cifar100_cifar10":  "HSBN (Ours)",
 }
 
 # Line styles — FIN stands out, baselines are distinct but secondary
