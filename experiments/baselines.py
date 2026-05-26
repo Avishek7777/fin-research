@@ -63,7 +63,8 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from train import (
     set_seed, get_coarse_labels,
-    save_checkpoint, CIFAR100_COARSE_LABELS
+    save_checkpoint, load_checkpoint,
+    CIFAR100_COARSE_LABELS
 )
 
 
@@ -80,6 +81,7 @@ CIFAR100_STD  = [0.2675, 0.2565, 0.2761]
 def build_dataloaders(
     data_cfg    : dict,
     dataset_name: str = "cifar100",
+    download    : bool = True,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Build train and validation dataloaders for CIFAR-10 or CIFAR-100.
@@ -87,6 +89,7 @@ def build_dataloaders(
     Args:
         data_cfg: Configuration dictionary with batch_size, num_workers, etc.
         dataset_name: 'cifar10' or 'cifar100'
+        download: whether to download missing datasets.
 
     Returns:
         train_loader, val_loader
@@ -151,10 +154,10 @@ def build_dataloaders(
     )
 
     val_dataset = DatasetClass(
-        root     = root,
-        train    = False,
-        download = not val_exists,  # Only download if missing
-        transform = val_transform,
+        root      = root,
+        train     = False,
+        download  = download and not val_exists,  # Only download if missing
+        transform  = val_transform,
     )
 
     train_loader = DataLoader(
@@ -362,6 +365,11 @@ def train_baseline(
     model_name    : str,
     dataset_name  : str = "cifar100",
     seed          : int = 1,
+    checkpoint_dir: str = "checkpoints",
+    log_dir       : str = "runs",
+    download      : bool = True,
+    resume_path   : Optional[str] = None,
+    device_str    : str = "auto",
 ) -> dict:
     """
     Train a baseline model using identical setup to FIN-v2.
@@ -373,11 +381,20 @@ def train_baseline(
     set_seed(seed)
 
     # Device
-    if torch.cuda.is_available():
-        try:
-            torch.zeros(1).cuda()
+    if device_str == "auto":
+        if torch.cuda.is_available():
+            try:
+                torch.zeros(1).cuda()
+                device = torch.device("cuda")
+            except Exception:
+                device = torch.device("cpu")
+        else:
+            device = torch.device("cpu")
+    elif device_str == "cuda":
+        if torch.cuda.is_available():
             device = torch.device("cuda")
-        except Exception:
+        else:
+            print(f"[Warning] CUDA unavailable, falling back to CPU")
             device = torch.device("cpu")
     else:
         device = torch.device("cpu")
@@ -388,7 +405,9 @@ def train_baseline(
     model = model.to(device)
 
     # Data
-    train_loader, val_loader = build_dataloaders(cfg["data"], dataset_name)
+    train_loader, val_loader = build_dataloaders(
+        cfg["data"], dataset_name, download=download
+    )
 
     # Optimizer — identical to FIN-v2
     decay, no_decay = [], []
@@ -423,22 +442,29 @@ def train_baseline(
 
     # Logging
     ckpt_dir = os.path.join(
-        "checkpoints", 
+        checkpoint_dir,
         f"{model_name}_{dataset_name}_seed{seed}"
     )
     os.makedirs(ckpt_dir, exist_ok=True)
     writer = SummaryWriter(
-        log_dir=os.path.join(cfg["experiment"]["log_dir"], 
-                           f"{model_name}_{dataset_name}_seed{seed}")
+        log_dir=os.path.join(log_dir, f"{model_name}_{dataset_name}_seed{seed}")
     )
 
     best_joint = 0.0
     best_metrics = {"fine_acc": 0.0, "coarse_acc": 0.0, "joint": 0.0}
     grad_clip = cfg["training"]["grad_clip"]
 
+    start_epoch = 0
+    if resume_path is not None:
+        if os.path.exists(resume_path):
+            start_epoch = load_checkpoint(resume_path, model, optimizer, scheduler, device)
+            print(f"[{model_name}] Resuming from checkpoint: {resume_path}")
+        else:
+            raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+
     print(f"[{model_name}] Starting training: {total_epochs} epochs\n")
 
-    for epoch in range(total_epochs):
+    for epoch in range(start_epoch, total_epochs):
         # ── Train ─────────────────────────────────────────────────────────
         model.train()
         train_metrics = {"loss": 0.0, "fine_acc": 0.0, "coarse_acc": 0.0, "joint": 0.0}
@@ -562,6 +588,11 @@ def run_model_training(
     model_name      : str,
     dataset_name    : str,
     seeds           : List[int],
+    checkpoint_dir  : str = "checkpoints",
+    log_dir         : str = "runs",
+    download        : bool = True,
+    resume_path     : Optional[str] = None,
+    device_str      : str = "auto",
 ) -> dict:
     """
     Run training for a single model across multiple seeds.
@@ -580,7 +611,12 @@ def run_model_training(
         model = model_class(**model_kwargs)
         
         metrics = train_baseline(
-            model, cfg, model_name, dataset_name, seed
+            model, cfg, model_name, dataset_name, seed,
+            checkpoint_dir=checkpoint_dir,
+            log_dir=log_dir,
+            download=download,
+            resume_path=resume_path,
+            device_str=device_str,
         )
         metrics["seed"] = seed
         all_results.append(metrics)
@@ -669,6 +705,30 @@ def main():
         help="Which baseline to train"
     )
     parser.add_argument(
+        "--device", type=str, default="auto",
+        choices=["auto", "cuda", "cpu"],
+        help="Which device to use for training"
+    )
+    parser.add_argument(
+        "--checkpoint-dir", type=str,
+        default=None,
+        help="Override the checkpoint directory from config"
+    )
+    parser.add_argument(
+        "--log-dir", type=str,
+        default=None,
+        help="Override the TensorBoard log directory from config"
+    )
+    parser.add_argument(
+        "--resume", type=str,
+        default=None,
+        help="Path to checkpoint to resume training from"
+    )
+    parser.add_argument(
+        "--no-download", action="store_true",
+        help="Do not download missing CIFAR datasets"
+    )
+    parser.add_argument(
         "--dataset", type=str, default="cifar100",
         choices=["cifar10", "cifar100", "both"],
         help="Which dataset to train on"
@@ -690,6 +750,23 @@ def main():
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
+
+    # Determine overrideable paths and device
+    checkpoint_dir = args.checkpoint_dir or cfg["experiment"].get("checkpoint_dir", "checkpoints")
+    log_dir        = args.log_dir or cfg["experiment"].get("log_dir", "runs")
+    download       = not args.no_download
+
+    if args.device == "auto":
+        if torch.cuda.is_available():
+            try:
+                torch.zeros(1).cuda()
+                device = "cuda"
+            except Exception:
+                device = "cpu"
+        else:
+            device = "cpu"
+    else:
+        device = args.device
 
     # Determine class counts based on dataset
     all_results = {}
@@ -722,7 +799,12 @@ def main():
             }
             results = run_model_training(
                 MobileNetV2Fine, model_kwargs, cfg,
-                "mobilenet_fine", dataset_name, seeds
+                "mobilenet_fine", dataset_name, seeds,
+                checkpoint_dir=checkpoint_dir,
+                log_dir=log_dir,
+                download=download,
+                resume_path=args.resume,
+                device_str=device,
             )
             dataset_results["mobilenet_fine"] = results
 
@@ -739,7 +821,12 @@ def main():
             }
             results = run_model_training(
                 MobileNetV2Aux, model_kwargs, cfg,
-                "mobilenet_aux", dataset_name, seeds
+                "mobilenet_aux", dataset_name, seeds,
+                checkpoint_dir=checkpoint_dir,
+                log_dir=log_dir,
+                download=download,
+                resume_path=args.resume,
+                device_str=device,
             )
             dataset_results["mobilenet_aux"] = results
         
